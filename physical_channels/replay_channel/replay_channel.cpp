@@ -76,6 +76,44 @@ double ReplayChannel::gen_probability(unsigned int transmission_power)
     }
 }
 
+int ReplayChannel::power_column(unsigned int transmission_power)
+{
+    switch (transmission_power)
+    {
+        case 1U:  return 0;
+        case 10U: return 1;
+        case 25U: return 2;
+        default:  return -1;
+    }
+}
+
+double ReplayChannel::mean_probability(unsigned int transmission_power)
+{
+    /* The replay channel's analogue of sum_s pi_s rho_s: the empirical decode
+       rate over the whole recorded window. There is no FSMC to average over,
+       so the recording itself supplies the long-run distribution.
+
+       Note this is the *measured* rate, whereas gen_probability() returns the
+       rounded PROB_* view the predictor is shown. The two should agree to
+       within that rounding; a wide gap means the constants are stale with
+       respect to the CSV. */
+    const int col = power_column(transmission_power);
+    if (col < 0)
+    {
+        std::cerr << "ReplayChannel: unsupported power " << transmission_power
+                  << "W — returning 0.0\n";
+        return 0.0;
+    }
+
+    if (rows.empty()) return 0.0;  /* the constructor rejects this; belt and braces */
+
+    unsigned long long successes = 0;
+    for (const auto& row : rows)
+        if (row[col] != 0) ++successes;
+
+    return static_cast<double>(successes) / static_cast<double>(rows.size());
+}
+
 received_frame_t ReplayChannel::gen_frame_with_probability(transmitted_frame_t transmitted_frame)
 {
     received_frame_t recv;
@@ -83,18 +121,14 @@ received_frame_t ReplayChannel::gen_frame_with_probability(transmitted_frame_t t
     recv.transmission_power = transmitted_frame.transmission_power;
     recv.frequency          = transmitted_frame.frequency;
 
-    int col;
-    switch (transmitted_frame.transmission_power)
+    const int col = power_column(transmitted_frame.transmission_power);
+    if (col < 0)
     {
-        case 1U:  col = 0; break;
-        case 10U: col = 1; break;
-        case 25U: col = 2; break;
-        default:
-            std::cerr << "ReplayChannel: unsupported power "
-                      << transmitted_frame.transmission_power
-                      << "W — treating frame as failed\n";
-            recv.success_prob = 0.0;
-            return recv;
+        std::cerr << "ReplayChannel: unsupported power "
+                  << transmitted_frame.transmission_power
+                  << "W — treating frame as failed\n";
+        recv.success_prob = 0.0;
+        return recv;
     }
 
     const unsigned int t = *system_tick;

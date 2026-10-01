@@ -87,9 +87,18 @@ rs.BASE_CHANNELS = [{
 #
 # Both rosters mirror run_simulation's, with only the channel and frequency
 # rebound, so curve names and figure layout match across the two experiments.
-# `sweep` carries the full 9 (RM / EDF / CHARM / CHEDF / CATS); `error_sweep`
-# carries the trimmed 5, since each predictor-sensitive scheduler draws one
-# curve per error level.
+# `sweep` carries the full 13 (RM / EDF / SRM / SEDF / CHARM / CHEDF / CATS);
+# `error_sweep` carries the trimmed 7, since each predictor-sensitive
+# scheduler draws one curve per error level.
+#
+# A note on SRM/SEDF here specifically: their static estimate is whatever the
+# channel reports as its long-run mean, and ReplayChannel reports the
+# empirical decode rate of the recorded window. That is very close to the
+# fixed PROB_* view the predictor is shown on this channel, so on the replay
+# experiment SRM/SEDF and CHARM/CHEDF are fed almost the same number and the
+# pair mostly isolates the RX-slot airtime rather than the information. The
+# informative comparison for these two is the FSMC sweep in run_simulation,
+# where the live prediction actually moves.
 def _sched(cfg: dict) -> dict:
     return dict(cfg, frequency=FREQ_HZ)
 
@@ -98,6 +107,10 @@ rs.SCHEDULERS = [
     ("RM_25W",     _sched(rs.BASE_RM_SCHEDULER_25W)),
     ("EDF_10W",    _sched(rs.BASE_EDF_SCHEDULER)),
     ("EDF_25W",    _sched(rs.BASE_EDF_SCHEDULER_25W)),
+    ("SRM_10W",    _sched(rs.BASE_SRM_SCHEDULER)),
+    ("SRM_25W",    _sched(rs.BASE_SRM_SCHEDULER_25W)),
+    ("SEDF_10W",   _sched(rs.BASE_SEDF_SCHEDULER)),
+    ("SEDF_25W",   _sched(rs.BASE_SEDF_SCHEDULER_25W)),
     ("CHARM_10W",  _sched(rs.BASE_SCHEDULER)),
     ("CHARM_25W",  _sched(rs.BASE_SCHEDULER_25W)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),
@@ -109,6 +122,8 @@ rs.SCHEDULERS = [
 rs.ERROR_SWEEP_SCHEDULERS = [
     ("EDF_10W",    _sched(rs.BASE_EDF_SCHEDULER)),
     ("EDF_25W",    _sched(rs.BASE_EDF_SCHEDULER_25W)),
+    ("SEDF_10W",   _sched(rs.BASE_SEDF_SCHEDULER)),
+    ("SEDF_25W",   _sched(rs.BASE_SEDF_SCHEDULER_25W)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),
     ("CHEDF_25W",  _sched(rs.BASE_CHEDF_SCHEDULER_25W)),
     ("CATS",       {"type": "CATS", "frequency": FREQ_HZ,

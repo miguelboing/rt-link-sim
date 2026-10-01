@@ -2,7 +2,7 @@
 
 Real-time scheduling over an unreliable link. A C++ simulator for wireless packet scheduling under deadline and channel-quality constraints, driven by a Python experiment harness.
 
-The project's contribution is **CATS** (Channel-Adaptive Transmission Scheduler), which combines a belief about the current channel state with a utilization test to decide *when* to transmit and at *what power*. The repository also implements four baselines so CATS can be measured against them on identical task sets: CHARM, CHEDF, EDF and Rate-Monotonic.
+The project's contribution is **CATS** (Channel-Adaptive Transmission Scheduler), which combines a belief about the current channel state with a utilization test to decide *when* to transmit and at *what power*. The repository also implements six baselines so CATS can be measured against them on identical task sets: CHARM, CHEDF, SRM, SEDF, EDF and Rate-Monotonic. They form a ladder of channel knowledge — none (EDF, Rate-Monotonic), the channel's long-run average (SRM, SEDF), a prediction refreshed during the run (CHARM, CHEDF) — crossed with the two queue disciplines.
 
 ## Overview
 
@@ -24,12 +24,29 @@ A packet needs `frames` successful slots before its deadline to count as deliver
 | `CATS` | `CATS_scheduler` | `frequency`, `belief_threshold`, `utilization_threshold` | Channel and belief aware, picks its own power |
 | `CHARM` | `CHARM_scheduler` | `tx_power`, `frequency`, `rx_period` | Baseline, accumulated-probability retransmission over a period-ordered queue |
 | `CHEDF` | `CHEDF_scheduler` | `tx_power`, `frequency`, `rx_period` | CHARM's policy over a deadline-ordered queue |
+| `SRM` | `SRM_scheduler` | `tx_power`, `frequency` | CHARM's redundancy rule driven by a static channel average, period-ordered queue |
+| `SEDF` | `SEDF_scheduler` | `tx_power`, `frequency` | The same over a deadline-ordered queue |
 | `EDF` | `EDF_scheduler` | `tx_power`, `frequency` | Fixed-power baseline |
 | `Rate_M` | `RM_scheduler` | `tx_power`, `frequency` | Fixed-power baseline |
 
 The fixed-power baselines are normally run at both 10 W and 25 W, the two upper levels CATS predicts over, so CATS can be compared against a baseline burning comparable energy.
 
-> **Note:** `CHEDF_scheduler` is a deliberate copy of `CHARM_scheduler` that differs only in its queue comparator. Any change to the shared retransmission or listening logic has to be applied to both files, or the comparison stops being interpretable.
+> **Note:** `CHEDF_scheduler` is a deliberate copy of `CHARM_scheduler` that differs only in its queue comparator, and `SEDF_scheduler` is the same copy of `SRM_scheduler`. Any change to the shared retransmission or listening logic has to be applied to both files of a pair, or the comparison stops being interpretable.
+
+### The static-channel baselines, SRM and SEDF
+
+SRM and SEDF replace CHARM's refreshed prediction with a single number fixed before the run starts: the channel's long-run mean decode probability at the scheduler's transmit power,
+
+$$\bar{\rho}_j = \sum_s \pi_s \, \rho_s\!\left(\mathrm{SNR}(P_j)\right)$$
+
+where $\rho_s$ is the decode probability of channel state $s$ and $\pi_s$ is the long-run fraction of time the channel spends in that state, so the more frequent conditions weigh more. They then allocate redundant transmissions from that average with CHARM's accumulated-probability rule. Because the estimate never moves, the redundancy is deterministic: every instance of a task is sent the same number of times, whatever the channel is actually doing.
+
+This isolates what *refreshed* channel information adds beyond knowing only the channel's average quality — the RM/SRM gap is what redundancy-from-the-average buys over no redundancy at all, and the SRM/CHARM gap is what tracking the channel adds on top.
+
+Two consequences worth keeping in mind when reading a figure:
+
+- **They never listen.** A static estimate learns nothing from an RX slot, so SRM and SEDF have no `rx_period` and spend every slot transmitting or idle. They therefore get more transmit opportunities than CHARM/CHEDF at the same power, and an SRM/CHARM gap mixes the information effect with that airtime difference. Read it alongside the energy row.
+- **The estimate comes from the channel, not from a config field.** `BasePhysicalChannel::mean_probability()` supplies it, and `main.cpp` queries it once at construction. `SigmoidChannel` computes $\pi$ as the stationary distribution of its own transition matrix; `ReplayChannel` returns the empirical decode rate of the recorded window. A new channel has to implement the method — it is pure virtual.
 
 ## Build
 
@@ -111,8 +128,8 @@ python run_simulation.py <n_runs> <mode> <run_name> [belief_threshold] [utilizat
 
 Three modes:
 
-- `sweep`: schedulability and energy against utilization, one curve per scheduler, at zero prediction error, so no gap on the figure can be blamed on predictor noise. Nine schedulers are compared, covering the full cross of retransmission policy and queue discipline.
-- `error_sweep`: the same sweep repeated at each level in `PREDICT_ERRORS` (0.0, 0.15, 0.30), drawing one curve per predictor-sensitive scheduler per error level. It uses a reduced roster of five, all deadline-ordered, so the surviving gaps come from the power policy rather than the queue discipline.
+- `sweep`: schedulability and energy against utilization, one curve per scheduler, at zero prediction error, so no gap on the figure can be blamed on predictor noise. Thirteen schedulers are compared, covering the full cross of channel knowledge and queue discipline.
+- `error_sweep`: the same sweep repeated at each level in `PREDICT_ERRORS` (0.0, 0.15, 0.30), drawing one curve per predictor-sensitive scheduler per error level. It uses a reduced roster of seven, all deadline-ordered, so the surviving gaps come from the power policy rather than the queue discipline. EDF and SEDF ignore the predictor, so each contributes one flat curve.
 - `tests`: per-test diagnostic runs. This is by far the heaviest mode, because it parses the full simulation log in Python.
 
 An unknown mode is rejected before any work starts.
@@ -213,6 +230,8 @@ schedulers/
   cats/                          # CATS, channel and belief aware
   charm/                         # CHARM baseline
   chedf/                         # CHARM's policy over an EDF queue
+  srm/                           # static-channel-average redundancy, RM order
+  sedf/                          # the same over an EDF queue
   earliest_deadline_first/       # EDF baseline
   rate_monotonic/                # Rate-Monotonic baseline
 system_model/

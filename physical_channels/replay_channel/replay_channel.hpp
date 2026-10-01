@@ -22,9 +22,14 @@ public:
                   std::shared_ptr<unsigned int> sys_tick);
 
     double gen_probability(unsigned int transmission_power) override;
+    double mean_probability(unsigned int transmission_power) override;
     received_frame_t gen_frame_with_probability(transmitted_frame_t transmitted_frame) override;
 
 private:
+    /* Column of `rows` carrying the outcomes for a transmission power, or -1
+       if the power is not one of the three recorded ones. */
+    static int power_column(unsigned int transmission_power);
+
     /* CSV row: [success_1W, success_10W, success_25W] as 0/1 ints. */
     std::vector<std::array<int, 3>> rows;
     std::shared_ptr<unsigned int> system_tick;

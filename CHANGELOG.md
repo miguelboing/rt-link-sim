@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Schedulers
+
+- Added **SRM** ("Static RM") and **SEDF** ("Static EDF"): CHARM's accumulated-probability redundancy rule driven by a *static* estimate of the channel instead of a refreshed prediction. The estimate is the channel's long-run mean decode probability at the scheduler's transmit power, `rho_bar_j = sum_s pi_s rho_s(SNR(P_j))`, fixed before the run starts, so the redundancy allocated to each frame is deterministic. They sit between the fixed-power baselines and the CHARM family, and exist to measure what *refreshed* channel information adds beyond knowing the channel's average quality.
+- SRM and SEDF never enter RX_MODE and take no `rx_period`: a static estimate learns nothing from listening. They therefore spend every slot transmitting or idle, which also makes them cheaper in airtime than CHARM/CHEDF at the same power.
+- `SEDF_scheduler` is a deliberate copy of `SRM_scheduler` differing only in the queue comparator, mirroring the existing CHARM/CHEDF arrangement and carrying the same keep-in-sync requirement.
+
+### Channel
+
+- `BasePhysicalChannel` gained `mean_probability()`, the long-run average decode probability at a power. `SigmoidChannel` averages its per-state curves over the chain's stationary distribution, computed once at construction by power iteration on the transition matrix; `ReplayChannel` returns the empirical decode rate of the recorded window.
+- `SigmoidChannel` state handling tidied: the state count is now the single constant `N_STATES` rather than three independent literals, the per-state decode curve is reachable without stepping the chain, and a `fsmc_states.json` shorter than the chain is rejected at construction instead of being read out of bounds.
+- Behaviour of the existing schedulers is unchanged; seeded runs reproduce byte-identically.
+
+### Experiment harness
+
+- `sweep` roster grows from 9 to 13 schedulers, `error_sweep` from 5 to 7. SRM and SEDF are predictor-independent, so the error sweep runs them once and replicates.
+- Sweep figures fall back to the `tab20` palette past 10 curves, leaving shorter rosters on the colors they had.
+
 ## v1.0
 
 First complete release of the simulator and its experiment harness. `v0.5` ran a single EDF scheduler over a static channel from a hardcoded `main.cpp`; this release is a config-driven, reproducible, five-scheduler comparison framework. 161 commits.

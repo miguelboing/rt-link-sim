@@ -1,0 +1,80 @@
+#include <algorithm>
+#include <cmath>
+#include <numeric>
+
+#include "sedf_scheduler.hpp"
+
+SEDF_scheduler::SEDF_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), mean_prob(mean_prob) {};
+
+scheduled_frame_t SEDF_scheduler::do_schedule_frame(void)
+{
+    scheduled_frame_t scheduled_frame;
+    scheduled_frame.transmission_power = this->tx_power;
+    scheduled_frame.frequency = this->frequency;
+
+    /* No rx_period branch: this scheduler never listens, so every slot is a
+       transmit opportunity. See the class comment. */
+
+    /* Find the packet with the earliest deadline. This is the one line of
+       policy that separates SEDF from SRM -- everything below is SRM's
+       redundancy rule, kept identical on purpose.
+
+       Unlike SRM's period comparator this needs no is_periodic guard: a
+       deadline is well defined for aperiodic packets too, so every buffered
+       packet is rankable and none has to be skipped. */
+    auto lowest_it = std::min_element(this->buffer_packet->begin(),
+                                      this->buffer_packet->end(),
+                                      [](const packet_t& a, const packet_t& b) {
+                                          return a.deadline < b.deadline;
+                                      });
+
+    if (lowest_it != this->buffer_packet->end())
+    {
+        scheduled_frame.packet = &(*lowest_it);
+        scheduled_frame.radio_mode = TX_MODE;
+
+        uint64_t key = packet_key(lowest_it->id, lowest_it->id_count);
+
+        /* Check if this frame is being transmitted for the first time */
+        if (accumulated_prob.find(key) == accumulated_prob.end())
+        {
+            accumulated_prob[key] = this->mean_prob;
+        }
+        else
+        {
+            /* Calculate the accumulated prob after this transmission */
+            accumulated_prob[key] =
+                accumulated_prob[key] + this->mean_prob - accumulated_prob[key] * this->mean_prob;
+        }
+
+        /* Check if the prob is high enough to remove this frame from the buffer */
+        if (accumulated_prob[key] >=
+            std::pow(lowest_it->reliability_req, 1.0 / lowest_it->frames))
+        {
+            scheduled_frame.remove_from_buffer = true;
+            accumulated_prob.erase(key);
+        }
+        else
+        {
+            scheduled_frame.remove_from_buffer = false;
+        }
+    }
+    else
+    {
+        /* Empty buffer. CHEDF drops into RX_MODE here to refresh its
+           prediction; a static estimate has nothing to listen for, so the
+           slot idles as it would under EDF. */
+        scheduled_frame.packet = nullptr;
+        scheduled_frame.radio_mode = IDLE;
+    }
+
+    return scheduled_frame;
+}
+
+std::string SEDF_scheduler::get_name() const {
+    /* Power is part of the name so runs at different tx_power don't overwrite
+       each other's scheduled-packet logs. A separate class from SRM, so this
+       is the easiest line to forget to change when copying -- the pair would
+       then collide on the same log. */
+    return "SEDF_" + std::to_string(this->tx_power) + "W";
+}

@@ -222,9 +222,10 @@ BASE_SCHEDULER = {
 BASE_SCHEDULER_25W = dict(BASE_SCHEDULER, tx_power=25)
 
 # CHEDF — CHARM's retransmission/power policy over an EDF queue. A separate
-# scheduler type (C++ subclasses CHARM and overrides only the packet choice),
-# so it takes the same parameters and differs from BASE_SCHEDULER in nothing
-# but `type`. A CHARM/CHEDF pair on the same axes isolates queue discipline.
+# scheduler type, and on the C++ side a standalone class that copies CHARM's
+# rule rather than subclassing it, so it takes the same parameters and differs
+# from BASE_SCHEDULER in nothing but `type`. A CHARM/CHEDF pair on the same
+# axes isolates queue discipline.
 BASE_CHEDF_SCHEDULER     = dict(BASE_SCHEDULER, type="CHEDF")
 BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 
@@ -296,7 +297,8 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # retransmission rule. Keyed on the label's base name; a roster entry with no
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
-_POWER_SYMBOLS = {"RM": SYM_PFP, "EDF": SYM_PFP, "CHARM": SYM_PCH, "CHEDF": SYM_PCH}
+_POWER_SYMBOLS = {"RM": SYM_PFP, "EDF": SYM_PFP, "CHARM": SYM_PCH, "CHEDF": SYM_PCH,
+                  "SRM": SYM_PCH, "SEDF": SYM_PCH}
 
 def scheduler_title(label: str, *extra: str) -> str:
     """Display form of a roster label: `CHEDF_10W` reads as
@@ -378,6 +380,30 @@ BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 BASE_RM_SCHEDULER      = {"type": "Rate_M", "tx_power": 10, "frequency": 14074000}
 BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 
+# SRM / SEDF — "Static RM" and "Static EDF". CHARM's accumulated-probability
+# redundancy rule driven by a *static* estimate of the channel instead of a
+# refreshed prediction: the long-run mean decode probability at the
+# scheduler's power, rho_bar_j = sum_s pi_s rho_s(SNR(P_j)), averaged over the
+# FSMC's stationary distribution.
+#
+# The C++ side computes rho_bar from the channel at construction, which is why
+# these take no `rx_period` and carry no knob for one: a static estimate
+# learns nothing from an RX slot, so SRM/SEDF never listen and spend every
+# slot transmitting or idle. That makes them strictly cheaper in airtime than
+# CHARM/CHEDF at the same power — an SRM/CHARM gap mixes the value of
+# refreshed channel information with that airtime difference, so read it
+# alongside the energy row rather than on its own.
+#
+# They occupy the middle of the roster's ladder of channel knowledge:
+#   RM/EDF       — one send per frame, no channel knowledge
+#   SRM/SEDF     — redundancy from the channel's long-run average
+#   CHARM/CHEDF  — redundancy from a prediction refreshed every rx_period
+#   CATS         — belief-driven, and picks its power too
+BASE_SRM_SCHEDULER      = {"type": "SRM",  "tx_power": 10, "frequency": 14074000}
+BASE_SRM_SCHEDULER_25W  = dict(BASE_SRM_SCHEDULER, tx_power=25)
+BASE_SEDF_SCHEDULER     = {"type": "SEDF", "tx_power": 10, "frequency": 14074000}
+BASE_SEDF_SCHEDULER_25W = dict(BASE_SEDF_SCHEDULER, tx_power=25)
+
 # Fixed-power baselines are run at both power levels CATS can pick from
 # (CATS predicts over {1, 10, 25} W), so a CATS curve can be read against a
 # baseline that spends the same per-frame energy as its high-power choice.
@@ -389,11 +415,18 @@ BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 # (RM/EDF vs CHARM/CHEDF) crossed with queue discipline (RM/CHARM vs EDF/CHEDF)
 # — so each gap can be read against its own control, with the predictor perfect
 # so none of them can be blamed on prediction noise.
+# Ordered by family, with the two power levels of each adjacent — the panel
+# drawer takes color from enumeration order, so this is what puts a family's
+# 10 W and 25 W curves on neighbouring colors.
 SCHEDULERS = [
     ("RM_10W",     BASE_RM_SCHEDULER),
     ("RM_25W",     BASE_RM_SCHEDULER_25W),
     ("EDF_10W",    BASE_EDF_SCHEDULER),
     ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
+    ("SRM_10W",    BASE_SRM_SCHEDULER),
+    ("SRM_25W",    BASE_SRM_SCHEDULER_25W),
+    ("SEDF_10W",   BASE_SEDF_SCHEDULER),
+    ("SEDF_25W",   BASE_SEDF_SCHEDULER_25W),
     ("CHARM_10W",  BASE_SCHEDULER),
     ("CHARM_25W",  BASE_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
@@ -410,6 +443,8 @@ SCHEDULERS = [
 ERROR_SWEEP_SCHEDULERS = [
     ("EDF_10W",    BASE_EDF_SCHEDULER),
     ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
+    ("SEDF_10W",   BASE_SEDF_SCHEDULER),
+    ("SEDF_25W",   BASE_SEDF_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
@@ -419,7 +454,11 @@ ERROR_SWEEP_SCHEDULERS = [
 # at every predict_error level, so the error sweep runs them once and
 # replicates. Keyed on scheduler *type*, not the label, so adding another
 # fixed-power variant needs no change here.
-PREDICTOR_INDEPENDENT_TYPES = {"Rate_M", "EDF"}
+# SRM/SEDF belong here too: their decode estimate is computed from the
+# channel before the run and never refreshed, so predict_error cannot reach
+# them. On the error sweep they contribute one flat curve per power, like
+# the fixed-power baselines.
+PREDICTOR_INDEPENDENT_TYPES = {"Rate_M", "EDF", "SRM", "SEDF"}
 
 def is_predictor_independent(scheduler: dict) -> bool:
     return scheduler["type"] in PREDICTOR_INDEPENDENT_TYPES
@@ -1512,12 +1551,21 @@ def _draw_scenario_panel(axes, scen_name: str, sch_results: dict):
     — onto pre-existing axes. Shared between the combined plot and the
     per-scenario plots so they stay in sync. `axes` must be indexable with at
     least len(PANEL_METRICS) entries."""
-    colors     = plt.cm.tab10.colors
+    # tab10 holds 10 colors, so a roster longer than that wraps and gives two
+    # curves the same color. tab20 is used only past that point, which keeps
+    # the <=10-curve figures on exactly the colors they have always had; its
+    # entries are dark/light pairs of one hue, so with the roster ordered by
+    # family a scheduler's 10 W and 25 W curves come out as two shades of the
+    # same color.
+    colors     = plt.cm.tab10.colors if len(sch_results) <= 10 else plt.cm.tab20.colors
     # One distinct linestyle per scheduler — the list must be at least as long
     # as the roster or two curves end up sharing a style.
     linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1)),
-                  (0, (1, 1)), (0, (7, 2, 1, 2)), (0, (3, 1, 1, 1, 1, 1))]
-    markers    = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]
+                  (0, (1, 1)), (0, (7, 2, 1, 2)), (0, (3, 1, 1, 1, 1, 1)),
+                  (0, (5, 2, 1, 2)), (0, (2, 2)), (0, (8, 2)),
+                  (0, (1, 2, 4, 2))]
+    markers    = ["o", "s", "^", "D", "v", "P", "X", "*", "h",
+                  "<", ">", "p", "d"]
 
     # Only the mean is drawn. aggregate_runs still records the 10/90 band per
     # metric (`<key>_lo` / `<key>_hi`) in the results dict, but the bands were
@@ -1703,10 +1751,10 @@ def _draw_error_sweep_panel(axes, scen_name: str, err_to_sch: dict):
     """Draw one scenario column of the error-sweep figure — one row per
     PANEL_METRICS entry. Color/marker are fixed per scheduler so the curves
     match the other plots; linestyle varies with prediction_error.
-    Predictor-independent schedulers (EDF) are drawn once — CHEDF and CATS get
-    one curve per error level."""
+    Predictor-independent schedulers (EDF, SEDF) are drawn once — CHEDF and
+    CATS get one curve per error level."""
     colors  = plt.cm.tab10.colors
-    markers = ["o", "s", "^", "D", "v", "P", "X"]
+    markers = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]
     err_linestyles = {err: ls for err, ls in zip(PREDICT_ERRORS, ["-", "--", "-.", ":"])}
 
     # Stable scheduler→(color, marker) mapping derived from roster order.
