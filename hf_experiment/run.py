@@ -87,9 +87,9 @@ rs.BASE_CHANNELS = [{
 #
 # Both rosters mirror run_simulation's, with only the channel and frequency
 # rebound, so curve names and figure layout match across the two experiments.
-# `sweep` carries the full 13 (RM / EDF / SRM / SEDF / CHARM / CHEDF / CATS);
-# `error_sweep` carries the trimmed 7, since each predictor-sensitive
-# scheduler draws one curve per error level.
+# `sweep` carries the 8 of the paper's Simulation 1 (RM / EDF / SEDF at 10 W,
+# CHARM / CHEDF at both powers, CATS); `error_sweep` carries 7, since each
+# predictor-sensitive scheduler draws one curve per error level.
 #
 # A note on SRM/SEDF here specifically: their static estimate is whatever the
 # channel reports as its long-run mean, and ReplayChannel reports the
@@ -104,13 +104,8 @@ def _sched(cfg: dict) -> dict:
 
 rs.SCHEDULERS = [
     ("RM_10W",     _sched(rs.BASE_RM_SCHEDULER)),
-    ("RM_25W",     _sched(rs.BASE_RM_SCHEDULER_25W)),
     ("EDF_10W",    _sched(rs.BASE_EDF_SCHEDULER)),
-    ("EDF_25W",    _sched(rs.BASE_EDF_SCHEDULER_25W)),
-    ("SRM_10W",    _sched(rs.BASE_SRM_SCHEDULER)),
-    ("SRM_25W",    _sched(rs.BASE_SRM_SCHEDULER_25W)),
     ("SEDF_10W",   _sched(rs.BASE_SEDF_SCHEDULER)),
-    ("SEDF_25W",   _sched(rs.BASE_SEDF_SCHEDULER_25W)),
     ("CHARM_10W",  _sched(rs.BASE_SCHEDULER)),
     ("CHARM_25W",  _sched(rs.BASE_SCHEDULER_25W)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),

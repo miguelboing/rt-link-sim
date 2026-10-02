@@ -415,18 +415,36 @@ BASE_SEDF_SCHEDULER_25W = dict(BASE_SEDF_SCHEDULER, tx_power=25)
 # (RM/EDF vs CHARM/CHEDF) crossed with queue discipline (RM/CHARM vs EDF/CHEDF)
 # — so each gap can be read against its own control, with the predictor perfect
 # so none of them can be blamed on prediction noise.
-# Ordered by family, with the two power levels of each adjacent — the panel
-# drawer takes color from enumeration order, so this is what puts a family's
-# 10 W and 25 W curves on neighbouring colors.
+# The roster of the paper's Simulation 1 (zero predictor error), which is what
+# `sweep` runs. Read across the four properties it varies:
+#
+#   scheduler    listening          power      redundancy                drops early
+#   RM_10W       none               10 W       none, one send per frame  no
+#   EDF_10W      none               10 W       none, one send per frame  no
+#   SEDF_10W     none               10 W       static channel average    no
+#   CHARM_10W    every rx_period    10 W       refreshed estimate        no
+#   CHARM_25W    every rx_period    25 W       refreshed estimate        no
+#   CHEDF_10W    every rx_period    10 W       refreshed estimate        no
+#   CHEDF_25W    every rx_period    25 W       refreshed estimate        no
+#   CATS         adaptive           adaptive   refreshed estimate        yes
+#
+# Early dropping is not a knob: it is built into CATS (it discards a packet
+# whose remaining slots cannot cover its reliability target) and no other
+# scheduler does it.
+#
+# Deliberately *not* the full cross. Only the CHARM family is carried at both
+# powers, since 10 W vs 25 W is the comparison that matters for a scheduler
+# that spends its power under a retransmission rule; the fixed-power and
+# static baselines are pinned at 10 W. SRM (the period-ordered static
+# scheduler) is built and wired but no roster currently uses it — add it back
+# here if the period-ordered arm of that comparison is wanted.
+#
+# Ordered by family, with a family's two power levels adjacent: the panel
+# drawer takes color from enumeration order.
 SCHEDULERS = [
     ("RM_10W",     BASE_RM_SCHEDULER),
-    ("RM_25W",     BASE_RM_SCHEDULER_25W),
     ("EDF_10W",    BASE_EDF_SCHEDULER),
-    ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
-    ("SRM_10W",    BASE_SRM_SCHEDULER),
-    ("SRM_25W",    BASE_SRM_SCHEDULER_25W),
     ("SEDF_10W",   BASE_SEDF_SCHEDULER),
-    ("SEDF_25W",   BASE_SEDF_SCHEDULER_25W),
     ("CHARM_10W",  BASE_SCHEDULER),
     ("CHARM_25W",  BASE_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),

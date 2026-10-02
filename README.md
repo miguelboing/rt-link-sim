@@ -128,7 +128,7 @@ python run_simulation.py <n_runs> <mode> <run_name> [belief_threshold] [utilizat
 
 Three modes:
 
-- `sweep`: schedulability and energy against utilization, one curve per scheduler, at zero prediction error, so no gap on the figure can be blamed on predictor noise. Thirteen schedulers are compared, covering the full cross of channel knowledge and queue discipline.
+- `sweep`: schedulability and energy against utilization, one curve per scheduler, at zero prediction error, so no gap on the figure can be blamed on predictor noise. Eight schedulers are compared, climbing the ladder of channel knowledge: none (RM, EDF), the channel's long-run average (SEDF), a refreshed prediction (CHARM, CHEDF at 10 W and 25 W), and CATS, which also picks its own power and drops packets it cannot meet.
 - `error_sweep`: the same sweep repeated at each level in `PREDICT_ERRORS` (0.0, 0.15, 0.30), drawing one curve per predictor-sensitive scheduler per error level. It uses a reduced roster of seven, all deadline-ordered, so the surviving gaps come from the power policy rather than the queue discipline. EDF and SEDF ignore the predictor, so each contributes one flat curve.
 - `tests`: per-test diagnostic runs. This is by far the heaviest mode, because it parses the full simulation log in Python.
 

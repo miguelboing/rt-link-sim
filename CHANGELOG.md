@@ -16,7 +16,8 @@
 
 ### Experiment harness
 
-- `sweep` roster grows from 9 to 13 schedulers, `error_sweep` from 5 to 7. SRM and SEDF are predictor-independent, so the error sweep runs them once and replicates.
+- `sweep` roster set to the 8 of the paper's Simulation 1: RM, EDF and SEDF at 10 W, CHARM and CHEDF at 10 W and 25 W, and CATS. `error_sweep` grows from 5 to 7 with the two SEDF entries. SRM and SEDF are predictor-independent, so the error sweep runs them once and replicates.
+- SRM is built and wired but used by no roster; it is kept for the period-ordered arm of the static comparison.
 - Sweep figures fall back to the `tab20` palette past 10 curves, leaving shorter rosters on the colors they had.
 
 ## v1.0
