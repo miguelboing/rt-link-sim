@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
             system_tick
         );
     }
-    else if (sched_type == "SRM" || sched_type == "SEDF")
+    else if (sched_type == "MPRM" || sched_type == "MPEDF")
     {
         /* Static-channel schedulers. They size their redundancy from the
            channel's long-run mean decode probability at their transmit power,
@@ -147,7 +147,7 @@ int main(int argc, char* argv[])
                rho_bar_j = sum_s pi_s rho_s(SNR(P_j))
 
            which is computed once, here, rather than delivered as a
-           prediction: SRM/SEDF never enter RX_MODE, so nothing would ever
+           prediction: MPRM/MPEDF never enter RX_MODE, so nothing would ever
            hand them the value at run time. See
            BasePhysicalChannel::mean_probability(). */
         const unsigned int sched_tx_power  = sched_cfg["tx_power"];
@@ -180,9 +180,9 @@ int main(int argc, char* argv[])
             std::cout << "Static mean decode probability at " << sched_tx_power << "W: "
                       << mean_prob << std::endl;
 
-        if (sched_type == "SRM")
+        if (sched_type == "MPRM")
         {
-            scheduler = std::make_unique<SRM_scheduler>(
+            scheduler = std::make_unique<MPRM_scheduler>(
                 sched_tx_power,
                 sched_frequency,
                 mean_prob,
@@ -192,8 +192,8 @@ int main(int argc, char* argv[])
         }
         else
         {
-            /* SRM's policy over an EDF queue -- same parameters. */
-            scheduler = std::make_unique<SEDF_scheduler>(
+            /* MPRM's policy over an EDF queue -- same parameters. */
+            scheduler = std::make_unique<MPEDF_scheduler>(
                 sched_tx_power,
                 sched_frequency,
                 mean_prob,

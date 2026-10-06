@@ -4,9 +4,9 @@
 
 ### Schedulers
 
-- Added **SRM** ("Static RM") and **SEDF** ("Static EDF"): CHARM's accumulated-probability redundancy rule driven by a *static* estimate of the channel instead of a refreshed prediction. The estimate is the channel's long-run mean decode probability at the scheduler's transmit power, `rho_bar_j = sum_s pi_s rho_s(SNR(P_j))`, fixed before the run starts, so the redundancy allocated to each frame is deterministic. They sit between the fixed-power baselines and the CHARM family, and exist to measure what *refreshed* channel information adds beyond knowing the channel's average quality.
-- SRM and SEDF never enter RX_MODE and take no `rx_period`: a static estimate learns nothing from listening. They therefore spend every slot transmitting or idle, which also makes them cheaper in airtime than CHARM/CHEDF at the same power.
-- `SEDF_scheduler` is a deliberate copy of `SRM_scheduler` differing only in the queue comparator, mirroring the existing CHARM/CHEDF arrangement and carrying the same keep-in-sync requirement.
+- Added **MPRM** ("Mean-Predictor RM") and **MPEDF** ("Mean-Predictor EDF") — MP for the mean predictor they run on: CHARM's accumulated-probability redundancy rule driven by a *static* estimate of the channel instead of a refreshed prediction. The estimate is the channel's long-run mean decode probability at the scheduler's transmit power, `rho_bar_j = sum_s pi_s rho_s(SNR(P_j))`, fixed before the run starts, so the redundancy allocated to each frame is deterministic. They sit between the fixed-power baselines and the CHARM family, and exist to measure what *refreshed* channel information adds beyond knowing the channel's average quality.
+- MPRM and MPEDF never enter RX_MODE and take no `rx_period`: a static estimate learns nothing from listening. They therefore spend every slot transmitting or idle, which also makes them cheaper in airtime than CHARM/CHEDF at the same power.
+- `MPEDF_scheduler` is a deliberate copy of `MPRM_scheduler` differing only in the queue comparator, mirroring the existing CHARM/CHEDF arrangement and carrying the same keep-in-sync requirement.
 
 ### Channel
 
@@ -16,8 +16,8 @@
 
 ### Experiment harness
 
-- `sweep` roster set to the 8 of the paper's Simulation 1: RM, EDF and SEDF at 10 W, CHARM and CHEDF at 10 W and 25 W, and CATS. `error_sweep` grows from 5 to 7 with the two SEDF entries. SRM and SEDF are predictor-independent, so the error sweep runs them once and replicates.
-- SRM is built and wired but used by no roster; it is kept for the period-ordered arm of the static comparison.
+- `sweep` roster set to the 8 of the paper's Simulation 1: RM, EDF and MPEDF at 10 W, CHARM and CHEDF at 10 W and 25 W, and CATS. `error_sweep` grows from 5 to 7 with the two MPEDF entries. MPRM and MPEDF are predictor-independent, so the error sweep runs them once and replicates.
+- MPRM is built and wired but used by no roster; it is kept for the period-ordered arm of the static comparison.
 - Sweep figures fall back to the `tab20` palette past 10 curves, leaving shorter rosters on the colors they had.
 
 ## v1.0

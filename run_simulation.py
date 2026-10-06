@@ -298,7 +298,7 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
 _POWER_SYMBOLS = {"RM": SYM_PFP, "EDF": SYM_PFP, "CHARM": SYM_PCH, "CHEDF": SYM_PCH,
-                  "SRM": SYM_PCH, "SEDF": SYM_PCH}
+                  "MPRM": SYM_PCH, "MPEDF": SYM_PCH}
 
 def scheduler_title(label: str, *extra: str) -> str:
     """Display form of a roster label: `CHEDF_10W` reads as
@@ -380,7 +380,9 @@ BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 BASE_RM_SCHEDULER      = {"type": "Rate_M", "tx_power": 10, "frequency": 14074000}
 BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 
-# SRM / SEDF — "Static RM" and "Static EDF". CHARM's accumulated-probability
+# MPRM / MPEDF — "Mean-Predictor RM" and "Mean-Predictor EDF". The MP prefix is
+# the predictor they run on: a single mean decode probability standing in for
+# the refreshed one CHARM consults. CHARM's accumulated-probability
 # redundancy rule driven by a *static* estimate of the channel instead of a
 # refreshed prediction: the long-run mean decode probability at the
 # scheduler's power, rho_bar_j = sum_s pi_s rho_s(SNR(P_j)), averaged over the
@@ -388,21 +390,21 @@ BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 #
 # The C++ side computes rho_bar from the channel at construction, which is why
 # these take no `rx_period` and carry no knob for one: a static estimate
-# learns nothing from an RX slot, so SRM/SEDF never listen and spend every
+# learns nothing from an RX slot, so MPRM/MPEDF never listen and spend every
 # slot transmitting or idle. That makes them strictly cheaper in airtime than
-# CHARM/CHEDF at the same power — an SRM/CHARM gap mixes the value of
+# CHARM/CHEDF at the same power — an MPRM/CHARM gap mixes the value of
 # refreshed channel information with that airtime difference, so read it
 # alongside the energy row rather than on its own.
 #
 # They occupy the middle of the roster's ladder of channel knowledge:
 #   RM/EDF       — one send per frame, no channel knowledge
-#   SRM/SEDF     — redundancy from the channel's long-run average
+#   MPRM/MPEDF     — redundancy from the channel's long-run average
 #   CHARM/CHEDF  — redundancy from a prediction refreshed every rx_period
 #   CATS         — belief-driven, and picks its power too
-BASE_SRM_SCHEDULER      = {"type": "SRM",  "tx_power": 10, "frequency": 14074000}
-BASE_SRM_SCHEDULER_25W  = dict(BASE_SRM_SCHEDULER, tx_power=25)
-BASE_SEDF_SCHEDULER     = {"type": "SEDF", "tx_power": 10, "frequency": 14074000}
-BASE_SEDF_SCHEDULER_25W = dict(BASE_SEDF_SCHEDULER, tx_power=25)
+BASE_MPRM_SCHEDULER      = {"type": "MPRM",  "tx_power": 10, "frequency": 14074000}
+BASE_MPRM_SCHEDULER_25W  = dict(BASE_MPRM_SCHEDULER, tx_power=25)
+BASE_MPEDF_SCHEDULER     = {"type": "MPEDF", "tx_power": 10, "frequency": 14074000}
+BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
 
 # Fixed-power baselines are run at both power levels CATS can pick from
 # (CATS predicts over {1, 10, 25} W), so a CATS curve can be read against a
@@ -421,7 +423,7 @@ BASE_SEDF_SCHEDULER_25W = dict(BASE_SEDF_SCHEDULER, tx_power=25)
 #   scheduler    listening          power      redundancy                drops early
 #   RM_10W       none               10 W       none, one send per frame  no
 #   EDF_10W      none               10 W       none, one send per frame  no
-#   SEDF_10W     none               10 W       static channel average    no
+#   MPEDF_10W     none               10 W       static channel average    no
 #   CHARM_10W    every rx_period    10 W       refreshed estimate        no
 #   CHARM_25W    every rx_period    25 W       refreshed estimate        no
 #   CHEDF_10W    every rx_period    10 W       refreshed estimate        no
@@ -435,7 +437,7 @@ BASE_SEDF_SCHEDULER_25W = dict(BASE_SEDF_SCHEDULER, tx_power=25)
 # Deliberately *not* the full cross. Only the CHARM family is carried at both
 # powers, since 10 W vs 25 W is the comparison that matters for a scheduler
 # that spends its power under a retransmission rule; the fixed-power and
-# static baselines are pinned at 10 W. SRM (the period-ordered static
+# static baselines are pinned at 10 W. MPRM (the period-ordered static
 # scheduler) is built and wired but no roster currently uses it — add it back
 # here if the period-ordered arm of that comparison is wanted.
 #
@@ -444,7 +446,7 @@ BASE_SEDF_SCHEDULER_25W = dict(BASE_SEDF_SCHEDULER, tx_power=25)
 SCHEDULERS = [
     ("RM_10W",     BASE_RM_SCHEDULER),
     ("EDF_10W",    BASE_EDF_SCHEDULER),
-    ("SEDF_10W",   BASE_SEDF_SCHEDULER),
+    ("MPEDF_10W",   BASE_MPEDF_SCHEDULER),
     ("CHARM_10W",  BASE_SCHEDULER),
     ("CHARM_25W",  BASE_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
@@ -461,8 +463,8 @@ SCHEDULERS = [
 ERROR_SWEEP_SCHEDULERS = [
     ("EDF_10W",    BASE_EDF_SCHEDULER),
     ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
-    ("SEDF_10W",   BASE_SEDF_SCHEDULER),
-    ("SEDF_25W",   BASE_SEDF_SCHEDULER_25W),
+    ("MPEDF_10W",   BASE_MPEDF_SCHEDULER),
+    ("MPEDF_25W",   BASE_MPEDF_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
@@ -472,11 +474,11 @@ ERROR_SWEEP_SCHEDULERS = [
 # at every predict_error level, so the error sweep runs them once and
 # replicates. Keyed on scheduler *type*, not the label, so adding another
 # fixed-power variant needs no change here.
-# SRM/SEDF belong here too: their decode estimate is computed from the
+# MPRM/MPEDF belong here too: their decode estimate is computed from the
 # channel before the run and never refreshed, so predict_error cannot reach
 # them. On the error sweep they contribute one flat curve per power, like
 # the fixed-power baselines.
-PREDICTOR_INDEPENDENT_TYPES = {"Rate_M", "EDF", "SRM", "SEDF"}
+PREDICTOR_INDEPENDENT_TYPES = {"Rate_M", "EDF", "MPRM", "MPEDF"}
 
 def is_predictor_independent(scheduler: dict) -> bool:
     return scheduler["type"] in PREDICTOR_INDEPENDENT_TYPES
@@ -1480,9 +1482,22 @@ def _legend_ncol(labels, per_row: int) -> int:
     """How many legend columns fit. Width is judged on the *rendered* label:
     `$P_{\\mathrm{CH}}$` is 17 characters of markup that draws as about three
     glyphs, so counting the raw string would push every roster into one
-    column. `per_row` is how many of the *short* labels fit across."""
+    column. `per_row` is how many of the *short* labels fit across.
+
+    The width-limited count is then **balanced**. matplotlib fills a legend
+    column-major and gives the remainder to the trailing columns, so 8 entries
+    across 5 columns come out 2,2,2,1,1 — the last two curves each sit alone
+    at the top of their own column rather than continuing the stack, which
+    reads as though they belong to a different group. Taking the row count the
+    width implies and refilling into `ceil(n / rows)` columns leaves the
+    legend exactly as tall while making every column full to within one entry,
+    so a trailing entry stays underneath the one it follows (CATS under
+    CHEDF 25 W on the 8-scheduler sweep, rather than off in a column of its
+    own)."""
     longest = max(len(re.sub(r"\$[^$]*\$", "xxx", l)) for l in labels)
-    return per_row if longest <= 22 else max(2, per_row - 1)
+    fits    = per_row if longest <= 22 else max(2, per_row - 1)
+    rows    = math.ceil(len(labels) / fits)
+    return math.ceil(len(labels) / rows)
 
 def _grouped_legend_columns(handles, labels, key):
     """Re-order legend entries so that each scheduler gets its own column.
@@ -1769,7 +1784,7 @@ def _draw_error_sweep_panel(axes, scen_name: str, err_to_sch: dict):
     """Draw one scenario column of the error-sweep figure — one row per
     PANEL_METRICS entry. Color/marker are fixed per scheduler so the curves
     match the other plots; linestyle varies with prediction_error.
-    Predictor-independent schedulers (EDF, SEDF) are drawn once — CHEDF and
+    Predictor-independent schedulers (EDF, MPEDF) are drawn once — CHEDF and
     CATS get one curve per error level."""
     colors  = plt.cm.tab10.colors
     markers = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]

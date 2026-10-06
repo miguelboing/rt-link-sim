@@ -4,7 +4,7 @@
 #include "schedulers/rate_monotonic/rate_monotonic_scheduler.hpp"
 #include "schedulers/charm/charm_scheduler.hpp"
 #include "schedulers/chedf/chedf_scheduler.hpp"
-#include "schedulers/srm/srm_scheduler.hpp"
-#include "schedulers/sedf/sedf_scheduler.hpp"
+#include "schedulers/mprm/mprm_scheduler.hpp"
+#include "schedulers/mpedf/mpedf_scheduler.hpp"
 #include "schedulers/cats/cats.hpp"
 
