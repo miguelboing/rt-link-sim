@@ -21,7 +21,7 @@ A packet needs `frames` successful slots before its deadline to count as deliver
 
 | Type in config | Class | Parameters | Notes |
 |---|---|---|---|
-| `CATS` | `CATS_scheduler` | `frequency`, `belief_threshold`, `utilization_threshold` | Channel and belief aware, picks its own power |
+| `CATS` | `CATS_scheduler` | `frequency`, `belief_threshold`, `utilization_threshold`, and the optional switches `adaptive_power`, `early_drop`, `urgency_check` (all default true) plus `tx_power` when `adaptive_power` is false | Channel and belief aware, picks its own power |
 | `CHARM` | `CHARM_scheduler` | `tx_power`, `frequency`, `belief_threshold` | Baseline, accumulated-probability retransmission over a period-ordered queue; listens on belief |
 | `CHEDF` | `CHEDF_scheduler` | `tx_power`, `frequency`, `belief_threshold` | CHARM's policy over a deadline-ordered queue |
 | `MPRM` | `MPRM_scheduler` | `tx_power`, `frequency` | CHARM's redundancy rule driven by a static channel average, period-ordered queue |
@@ -130,6 +130,7 @@ Three modes:
 
 - `sweep`: schedulability and energy against utilization, one curve per scheduler, at zero prediction error, so no gap on the figure can be blamed on predictor noise. Eight schedulers are compared, climbing the ladder of channel knowledge: none (RM, EDF), the channel's long-run average (MPEDF), a refreshed prediction (CHARM, CHEDF at 10 W and 25 W), and CATS, which also picks its own power and drops packets it cannot meet.
 - `error_sweep`: the same sweep repeated at each level in `PREDICT_ERRORS` (0.0, 0.15, 0.30), drawing one curve per predictor-sensitive scheduler per error level. It uses a reduced roster of seven, all deadline-ordered, so the surviving gaps come from the power policy rather than the queue discipline. EDF and MPEDF ignore the predictor, so each contributes one flat curve.
+- `cats_comparison`: the CATS policy ablation. Seven CATS variants on the sweep's axes, differing only in three switches — adaptive transmit power, early packet dropping, and the listening urgency check — so each gap isolates one policy. Fixed-power variants run at 10 W and 25 W. Writes `results_cats_comparison*`.
 - `tests`: per-test diagnostic runs. This is by far the heaviest mode, because it parses the full simulation log in Python.
 
 An unknown mode is rejected before any work starts.

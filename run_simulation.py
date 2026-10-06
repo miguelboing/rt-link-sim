@@ -22,7 +22,7 @@ TESTS_DIR = "tests"
 
 # The modes the CLI accepts, checked before anything runs — see the guard in
 # __main__ for why an unknown one must not fall through to `tests`.
-MODES = ("tests", "sweep", "error_sweep")
+MODES = ("tests", "sweep", "error_sweep", "cats_comparison")
 
 # ── Figure style and paper symbols ────────────────────────────────────────────
 #
@@ -239,9 +239,18 @@ BASE_SCHEDULER_25W = dict(BASE_SCHEDULER, tx_power=25)
 BASE_CHEDF_SCHEDULER     = dict(BASE_SCHEDULER, type="CHEDF")
 BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 
+# The three ablation switches are spelled out rather than left to the C++
+# defaults so `experiment_params.json` records what a run actually used. All
+# three enabled is the published CATS. `tx_power` is read only when
+# adaptive_power is false, and must name a predictor tier (1, 10 or 25 W) —
+# the C++ constructor throws otherwise rather than silently deciding
+# retransmissions from a power it does not transmit at.
 BASE_CATS_SCHEDULER = {
     "type": "CATS",
     "frequency": 14074000,
+    "adaptive_power": True,
+    "early_drop": True,
+    "urgency_check": True,
     "belief_threshold": 0.7,
     "utilization_threshold": 0.9,
 }
@@ -310,6 +319,21 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 _POWER_SYMBOLS = {"RM": SYM_PFP, "EDF": SYM_PFP, "CHARM": SYM_PCH, "CHEDF": SYM_PCH,
                   "MPRM": SYM_PCH, "MPEDF": SYM_PCH}
 
+# Legend forms for the cats_comparison ablation labels. The raw labels key the
+# results dicts, name the test directories and name the per-scheduler logs, so
+# they stay terse and ASCII; these are the display names. scheduler_title()
+# consults this for the label's *base* (the part before any `_<n>W`), so a
+# fixed-power variant still gets its power appended in the usual parenthesis.
+# Every entry names only what differs from full CATS — adaptive power, early
+# dropping and the urgency check are all on unless the name says otherwise.
+_ABLATION_TITLES = {
+    "CATS_FULL":         "CATS, full",
+    "CATS_FIX_DROP":     "CATS, fixed power",
+    "CATS_FIX_NODROP":   "CATS, fixed power, no early drop",
+    "CATS_ADAPT_NODROP": "CATS, no early drop",
+    "CATS_NOURG":        "CATS, no urgency check",
+}
+
 def scheduler_title(label: str, *extra: str) -> str:
     """Display form of a roster label: `CHEDF_10W` reads as
     `CHEDF (P_CH = 10 W)` — the scheduler keeps its name and the parameters
@@ -325,7 +349,11 @@ def scheduler_title(label: str, *extra: str) -> str:
     base  = m.group(1) if m else label
     parts = [f"{_POWER_SYMBOLS.get(base, SYM_PFP)} = {m.group(2)} W"] if m else []
     parts.extend(extra)
-    return tex_safe(base) + (f" ({', '.join(parts)})" if parts else "")
+    # Ablation labels carry a spelled-out display name; everything else is
+    # shown as written. Already-rendered, so it skips tex_safe().
+    shown = _ABLATION_TITLES.get(base)
+    return (shown if shown is not None else tex_safe(base)) + \
+           (f" ({', '.join(parts)})" if parts else "")
 
 def _math(sym: str, expr: str) -> str:
     """Compose one of the SYM_* constants — which carry their own `$…$` — with
@@ -485,6 +513,47 @@ ERROR_SWEEP_SCHEDULERS = [
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
+]
+
+# ── CATS policy comparison (`cats_comparison` mode) ──────────────────────────
+#
+# Ablates CATS's three policies against the full scheduler, all on the same
+# axes as `sweep`. Every entry is the CATS *type* — only the switches differ —
+# so any gap on this figure is attributable to a policy and nothing else.
+#
+#   label                 adaptive power   early drop   urgency check
+#   CATS_FIX_NODROP_10W   no (10 W)        no           yes
+#   CATS_FIX_NODROP_25W   no (25 W)        no           yes
+#   CATS_ADAPT_NODROP     yes              no           yes
+#   CATS_FIX_DROP_10W     no (10 W)        yes          yes
+#   CATS_FIX_DROP_25W     no (25 W)        yes          yes
+#   CATS_FULL             yes              yes          yes
+#   CATS_NOURG            yes              yes          no
+#
+# The two fixed-power variants are carried at both 10 W and 25 W: against
+# 25 W, CATS's top tier, the adaptive gap reads as energy saved at equal
+# capability; against 10 W it reads as reliability bought at equal nominal
+# power, and 10 W is also what the Simulation 1 roster runs at, so those
+# curves are comparable with that figure.
+#
+# Reading the pairs: FIX_NODROP -> ADAPT_NODROP isolates adaptive power,
+# FIX_NODROP -> FIX_DROP isolates early dropping, and CATS_FULL -> CATS_NOURG
+# isolates the listening urgency check. CATS_FULL is the common corner.
+def _cats_variant(**overrides) -> dict:
+    """A CATS config with some switches flipped. Built from BASE_CATS_SCHEDULER
+    so belief/utilization thresholds and frequency stay in one place — and so
+    a CLI threshold override reaches these too, since it rewrites the dicts a
+    roster holds."""
+    return dict(BASE_CATS_SCHEDULER, **overrides)
+
+CATS_COMPARISON_SCHEDULERS = [
+    ("CATS_FIX_NODROP_10W", _cats_variant(adaptive_power=False, tx_power=10, early_drop=False)),
+    ("CATS_FIX_NODROP_25W", _cats_variant(adaptive_power=False, tx_power=25, early_drop=False)),
+    ("CATS_ADAPT_NODROP",   _cats_variant(early_drop=False)),
+    ("CATS_FIX_DROP_10W",   _cats_variant(adaptive_power=False, tx_power=10)),
+    ("CATS_FIX_DROP_25W",   _cats_variant(adaptive_power=False, tx_power=25)),
+    ("CATS_FULL",           _cats_variant()),
+    ("CATS_NOURG",          _cats_variant(urgency_check=False)),
 ]
 
 # Schedulers that never consult the ML predictor. Their results are identical
@@ -1400,14 +1469,19 @@ def average_metrics(runs: list[dict]) -> dict:
 
 # ── Sweep runner ──────────────────────────────────────────────────────────────
 
-def run_sweep(n_runs: int, n_workers: int) -> dict:
+def run_sweep(n_runs: int, n_workers: int, schedulers=None) -> dict:
     """For each (scenario, U, scheduler), run n_runs sims in a single big pool.
-    Returns nested dict results[scen_name][sch_name][U] = avg_schedulability."""
+    Returns nested dict results[scen_name][sch_name][U] = avg_schedulability.
+
+    `schedulers` defaults to SCHEDULERS; `cats_comparison` passes its own
+    roster. Only the parent reads it — each worker is handed a fully resolved
+    config — so this is safe across the spawn pool."""
+    roster = SCHEDULERS if schedulers is None else schedulers
     jobs = []
     for n, c_min, c_max, rr_min, rr_max in SWEEP_SCENARIOS:
         scen_name = scenario_label(n, c_min, c_max, rr_min, rr_max)
         for U in U_VALUES:
-            for sch_name, scheduler in SCHEDULERS:
+            for sch_name, scheduler in roster:
                 test = {
                     "name": f"{scen_name}_U={U:.2f}_{sch_name}",
                     "config": {
@@ -1429,7 +1503,7 @@ def run_sweep(n_runs: int, n_workers: int) -> dict:
     total = len(jobs)
     print(f"  [sweep] dispatching {total} sims "
           f"({len(SWEEP_SCENARIOS)} scen x {len(U_VALUES)} U x "
-          f"{len(SCHEDULERS)} sch x {n_runs} runs)", flush=True)
+          f"{len(roster)} sch x {n_runs} runs)", flush=True)
 
     # Use spawn so child interpreters start clean — without 'spawn', forked
     # workers inherit the parent's matplotlib/numpy state via COW which gets
@@ -1474,7 +1548,7 @@ def run_sweep(n_runs: int, n_workers: int) -> dict:
                 in_flight[fut2] = key
     print()
 
-    results = {scenario_label(*scen): {sch_name: {} for sch_name, _ in SCHEDULERS}
+    results = {scenario_label(*scen): {sch_name: {} for sch_name, _ in roster}
                for scen in SWEEP_SCENARIOS}
     for (scen_name, U, sch_name), runs in combo_runs.items():
         results[scen_name][sch_name][U] = aggregate_runs(runs)
@@ -1652,13 +1726,17 @@ def _window_k_suffix() -> str:
         return ""
     return f" ({SYM_KWIN}={BASE_SIM.get('window_k', 100)})"
 
-def plot_schedulability(results: dict):
+def plot_schedulability(results: dict, basename: str = "results_schedulability",
+                        title: str = None):
+    """`basename` and `title` are parameterised so `cats_comparison` writes its
+    own files instead of overwriting the sweep's."""
     scen_names = list(results.keys())
     n_scen     = len(scen_names)
     os.makedirs(TESTS_DIR, exist_ok=True)
 
     n_rows = len(PANEL_METRICS)
-    title  = f"Schedulability and Energy vs Utilization{_window_k_suffix()}"
+    if title is None:
+        title = f"Schedulability and Energy vs Utilization{_window_k_suffix()}"
 
     # Combined figure: one column per scenario, one row per PANEL_METRICS entry.
     fig, axes = plt.subplots(n_rows, n_scen, figsize=(6 * n_scen, 4.2 * n_rows),
@@ -1670,7 +1748,7 @@ def plot_schedulability(results: dict):
     for row, (_key, label, _ylim) in enumerate(PANEL_METRICS):
         axes[row, 0].set_ylabel(label)
     _title_and_legend(fig, axes[0, 0], title, per_row=5)
-    out = save_figure(os.path.join(TESTS_DIR, "results_schedulability"))
+    out = save_figure(os.path.join(TESTS_DIR, basename))
     plt.close()
     print(f"Schedulability plot saved to {out}")
 
@@ -1686,7 +1764,7 @@ def plot_schedulability(results: dict):
         _title_and_legend(fig, axs[0], f"{title} — {scenario_title(scen_name)}",
                           per_row=3)
         out = save_figure(os.path.join(TESTS_DIR,
-                                       f"results_schedulability_{_safe_filename(scen_name)}"))
+                                       f"{basename}_{_safe_filename(scen_name)}"))
         plt.close()
         print(f"Schedulability plot saved to {out}")
 
@@ -1911,13 +1989,14 @@ def write_experiment_params(mode: str, n_runs: int, run_name: Optional[str]) -> 
         # run actually used, or the snapshot won't reproduce the figure.
         "schedulers":  {name: cfg for name, cfg in
                         (ERROR_SWEEP_SCHEDULERS if mode == "error_sweep"
+                         else CATS_COMPARISON_SCHEDULERS if mode == "cats_comparison"
                          else SCHEDULERS)},
         "channels":    BASE_CHANNELS,
     }
 
     # error_sweep drives SWEEP_SCENARIOS too, so it takes this branch — only
     # `tests` mode runs the fixed-U SCENARIOS list.
-    if mode in ("sweep", "error_sweep"):
+    if mode in ("sweep", "error_sweep", "cats_comparison"):
         params["scenarios"] = {
             "SWEEP_SCENARIOS": [
                 {"n": n, "c_min": c_min, "c_max": c_max,
@@ -1996,9 +2075,10 @@ if __name__ == "__main__":
         # leaving theirs at the default would silently compare schedulers
         # under different listening policies. The names are printed so the
         # reach of the override is visible in the run header.
-        touched = sorted({name for roster in (SCHEDULERS, ERROR_SWEEP_SCHEDULERS)
+        _rosters = (SCHEDULERS, ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS)
+        touched = sorted({name for roster in _rosters
                           for name, cfg in roster if "belief_threshold" in cfg})
-        for roster in (SCHEDULERS, ERROR_SWEEP_SCHEDULERS):
+        for roster in _rosters:
             for _name, cfg in roster:
                 if "belief_threshold" in cfg:
                     cfg["belief_threshold"] = belief_threshold
@@ -2035,6 +2115,17 @@ if __name__ == "__main__":
         warn_window_k(SWEEP_SCENARIOS)
         results = run_sweep(n_runs, n_workers)
         plot_schedulability(results)
+        print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
+        sys.exit(0)
+
+    if mode == "cats_comparison":
+        print(f"Running CATS policy comparison ({n_runs} runs/point, "
+              f"{n_workers} workers, {len(CATS_COMPARISON_SCHEDULERS)} variants, "
+              f"window_k={BASE_SIM.get('window_k', 100)})")
+        warn_window_k(SWEEP_SCENARIOS)
+        results = run_sweep(n_runs, n_workers, schedulers=CATS_COMPARISON_SCHEDULERS)
+        plot_schedulability(results, basename="results_cats_comparison",
+                            title=f"CATS policy comparison{_window_k_suffix()}")
         print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 

@@ -11,6 +11,7 @@
 #include <streambuf>
 #include <cstdint>
 #include <cmath>
+#include <stdexcept>
 
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -233,14 +234,33 @@ int main(int argc, char* argv[])
             periodic_tasks.insert(periodic_tasks.end(), t.begin(), t.end());
         }
 
-        scheduler = std::make_unique<CATS_scheduler>(
-            sched_cfg["frequency"],
-            sched_cfg["belief_threshold"],
-            sched_cfg["utilization_threshold"],
-            periodic_tasks,
-            &buffer,
-            system_tick
-        );
+        /* The three ablation switches default to enabled, so a config that
+           omits them is the published CATS. `tx_power` is only read when
+           adaptive_power is false. */
+        /* The constructor rejects a fixed tx_power that is not a predictor
+           tier. Report it like any other bad config rather than letting the
+           exception abort the process -- a sweep worker would otherwise see
+           SIGABRT and no explanation. */
+        try
+        {
+            scheduler = std::make_unique<CATS_scheduler>(
+                sched_cfg["frequency"],
+                sched_cfg["belief_threshold"],
+                sched_cfg["utilization_threshold"],
+                periodic_tasks,
+                sched_cfg.value("adaptive_power", true),
+                sched_cfg.value("tx_power", 25U),
+                sched_cfg.value("early_drop", true),
+                sched_cfg.value("urgency_check", true),
+                &buffer,
+                system_tick
+            );
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "ERROR: " << e.what() << std::endl;
+            return -1;
+        }
     }
     else
     {

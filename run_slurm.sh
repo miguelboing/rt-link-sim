@@ -29,6 +29,7 @@
 # Override defaults via --export, e.g.:
 #     sbatch --export=N_RUNS=100,MODE=sweep,ALL       run_slurm.sh <run_name> [belief_threshold] [utilization_threshold]
 #     sbatch --export=N_RUNS=200,MODE=error_sweep,ALL run_slurm.sh <run_name>
+#     sbatch --export=N_RUNS=50,MODE=cats_comparison,ALL run_slurm.sh <run_name>
 # Reproducible run (same SEED → bit-identical output PNGs):
 #     sbatch --export=SEED=42,ALL run_slurm.sh <run_name>
 # Override the weakly-hard (m,k) window used by the sched_ratio_mk curve
@@ -83,10 +84,10 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 N_RUNS="${N_RUNS:-50}"   # runs averaged per (scenario, U, scheduler) point
-MODE="${MODE:-sweep}"    # tests | sweep | error_sweep
+MODE="${MODE:-sweep}"    # tests | sweep | error_sweep | cats_comparison
 case "${MODE}" in
-    tests|sweep|error_sweep) ;;
-    *) echo "ERROR: MODE='${MODE}' is not one of tests|sweep|error_sweep." >&2
+    tests|sweep|error_sweep|cats_comparison) ;;
+    *) echo "ERROR: MODE='${MODE}' is not one of tests|sweep|error_sweep|cats_comparison." >&2
        echo "       A typo here used to run the far heavier 'tests' mode instead," >&2
        echo "       which OOM-kills the step at n_runs>16 on --mem-per-cpu=1G." >&2
        exit 1 ;;

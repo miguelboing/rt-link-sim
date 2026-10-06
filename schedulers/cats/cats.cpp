@@ -3,6 +3,8 @@
 #include <numeric>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 #include "cats.hpp"
 
@@ -11,16 +13,44 @@ CATS_scheduler::CATS_scheduler(unsigned int frequency,
                                float belief_threshold,
                                double utilization_threshold,
                                const std::vector<periodic_task_t>& periodic_tasks,
+                               bool adaptive_power,
+                               unsigned int fixed_tx_power,
+                               bool early_drop,
+                               bool urgency_check,
                                BufferPacket* buffer,
                                std::shared_ptr<unsigned int> sys_tick):
     BaseScheduler(buffer, sys_tick),
     frequency(frequency),
+    adaptive_power(adaptive_power),
+    fixed_power_idx(N_POWERS - 1U),
+    early_drop(early_drop),
+    urgency_check(urgency_check),
     belief_threshold(belief_threshold),
     periodic_tasks(periodic_tasks),
     horizon_H(0U),
     utilization_threshold(utilization_threshold),
     max_power_idx(2U)
 {
+    /* Fixed-power mode has to name a tier the predictor actually reports, or
+       the probability driving its retransmission maths would belong to a
+       different power than the one transmitted -- the mismatch that once made
+       a 25 W CHARM decide from the 10 W curve. Resolve it once, loudly. */
+    if (!this->adaptive_power)
+    {
+        bool found = false;
+        for (unsigned int i = 0U; i < N_POWERS; i++)
+        {
+            if (POWER_LEVELS[i] == fixed_tx_power) { this->fixed_power_idx = i; found = true; break; }
+        }
+        if (!found)
+            throw std::runtime_error("CATS: fixed tx_power " + std::to_string(fixed_tx_power)
+                                     + "W is not one of the predictor tiers (1, 10, 25 W)");
+
+        /* No adaptive cap survives: the cap *is* the fixed tier, so p_best,
+           demand, infeasibility and urgency all read that tier too. */
+        this->max_power_idx = this->fixed_power_idx;
+    }
+
     this->transmission_prob[0] = this->transmission_prob[1] = this->transmission_prob[2] = 0.0;
     this->belief = 0.0;
     this->eigenvalue = BELIEF_DECAY;
@@ -79,15 +109,23 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     scheduled_frame_t scheduled_frame;
     scheduled_frame.frequency = this->frequency;
 
-    /* Drop unfeasible packets and detect urgent ones in the same pass.
-       Per-frame slot cost is the number of retransmissions needed to hit
-       the per-frame RR target (pow(RR, 1/frames)) at the best channel
-       probability we'll actually allow (transmission_prob[max_power_idx]) —
-       the cap is a hard energy limit, so feasibility past it is moot.
+    /* Classify every buffered packet, then act on the classification. The two
+       are kept separate so the early_drop switch governs *removal* only: with
+       dropping off, an infeasible packet stays queued but is still classified
+       infeasible, so it does not fall through into "urgent" and start
+       suppressing listening. Urgency is therefore the same set of packets in
+       both settings.
+
+       Per-frame slot cost is the number of retransmissions needed to hit the
+       per-frame RR target (pow(RR, 1/frames)) at the best channel probability
+       we'll actually allow (transmission_prob[max_power_idx]) — the cap is a
+       hard energy limit, so feasibility past it is moot. In fixed-power mode
+       that index is the fixed tier, so the same power drives demand,
+       infeasibility and urgency as is transmitted.
        Pre-prediction (p_best == 0) we fall back to 1 slot/frame so packets
        aren't all dropped before the first prediction lands. */
     const double p_best = this->transmission_prob[this->max_power_idx];
-    std::vector<std::pair<unsigned int, unsigned int>> to_drop;
+    std::vector<std::pair<unsigned int, unsigned int>> infeasible;
     bool no_urgent_packet = true;
     for (auto& pkt : *this->buffer_packet)
     {
@@ -100,21 +138,30 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
         const double needed_slots = static_cast<double>(remaining_frames) * slots_per_frame;
         if (std::isinf(needed_slots) || ticks_available < needed_slots)
         {
-            to_drop.emplace_back(pkt.id, pkt.id_count);
+            infeasible.emplace_back(pkt.id, pkt.id_count);   /* classified, not yet removed */
         }
         else if (ticks_available <= needed_slots)
         {
             no_urgent_packet = false;
         }
     }
-    for (auto& [id, id_count] : to_drop)
+
+    /* Removal is the switchable half. With early_drop off the infeasible list
+       is simply discarded and those packets run to deadline expiry (or get
+       retired by the reliability rule if the channel improves). */
+    if (this->early_drop)
     {
-        accumulated_prob.erase(packet_key(id, id_count));
-        this->buffer->drop_packet(id, id_count);
+        for (auto& [id, id_count] : infeasible)
+        {
+            accumulated_prob.erase(packet_key(id, id_count));
+            this->buffer->drop_packet(id, id_count);
+        }
     }
 
-    /* Listen only if we don't trust the channel AND no packet is on the edge of its deadline */
-    if (this->belief < this->belief_threshold && no_urgent_packet)
+    /* Listen if we don't trust the channel. With the urgency check on, hold
+       off while a packet is on the edge of its deadline; with it off, listen
+       regardless. Belief handling is identical either way. */
+    if (this->belief < this->belief_threshold && (!this->urgency_check || no_urgent_packet))
     {
         scheduled_frame.radio_mode = RX_MODE;
         scheduled_frame.packet = nullptr;
@@ -146,8 +193,12 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
             /* max_power_idx is set by receive_prediction based on the slack
                policy: pick the lowest tier whose predicted U fits below the
                threshold, then cap the selection loop there to save energy. */
+            /* Adaptive: walk tiers from the bottom and take the first that
+               clears the requirement. Fixed: the loop spans the single fixed
+               tier, so that is always the one chosen. */
+            const unsigned int lo_idx = this->adaptive_power ? 0U : this->fixed_power_idx;
             int chosen_idx = -1;
-            for (unsigned int i = 0U; i <= this->max_power_idx; i++)
+            for (unsigned int i = lo_idx; i <= this->max_power_idx; i++)
             {
                 double acc_after = acc + transmission_prob[i] - acc * transmission_prob[i];
                 if (acc_after >= req)
@@ -194,6 +245,11 @@ void CATS_scheduler::receive_prediction(const std::vector<double>& pred_probs)
 {
     std::copy(pred_probs.begin(), pred_probs.end(), this->transmission_prob);
 
+    /* Fixed-power mode keeps no adaptive cap at all: max_power_idx was pinned
+       to the fixed tier at construction and must not move, or the slack policy
+       would creep back into demand/infeasibility/urgency. */
+    if (!this->adaptive_power) return;
+
     /* Slack-aware power cap: walk the predictor tiers low-to-high and pick the
        first one whose predicted utilization fits below the threshold. If even
        the highest tier doesn't fit (overloaded schedule), fall back to it so
@@ -213,6 +269,19 @@ void CATS_scheduler::receive_prediction(const std::vector<double>& pred_probs)
 
 std::string CATS_scheduler::get_name() const
 {
-    return "CATS Scheduler";
+    /* Unchanged for the published configuration, so existing logs and any
+       tooling that looks for them keep working. Each ablation gets its own
+       name instead, or the variants would overwrite one another's
+       *_scheduled_packets.json the way CHARM/CHEDF once did. */
+    if (this->adaptive_power && this->early_drop && this->urgency_check)
+        return "CATS Scheduler";
+
+    std::string name = "CATS";
+    name += this->adaptive_power
+            ? "_adaptP"
+            : ("_" + std::to_string(POWER_LEVELS[this->fixed_power_idx]) + "W");
+    if (!this->early_drop)    name += "_nodrop";
+    if (!this->urgency_check) name += "_nourg";
+    return name;
 }
 

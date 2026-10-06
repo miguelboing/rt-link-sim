@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### CATS policy ablation
+
+- CATS's three policies are now individually switchable: `adaptive_power`, `early_drop` and `urgency_check`, all defaulting to enabled. A config that sets none of them is the published CATS and produces byte-identical output to the previous build.
+- With `adaptive_power` off, the configured `tx_power` drives the transmitted power *and* the demand, infeasibility and urgency maths — no adaptive cap is retained anywhere. A power that is not a predictor tier (1, 10, 25 W) is rejected with a clear config error.
+- With `early_drop` off, infeasible packets stay queued until deadline expiry or normal retirement. Classification is separated from removal, so they are not reclassified as urgent and do not suppress listening.
+- With `urgency_check` off, listening depends on belief alone. Belief update, threshold, power selection and dropping are unchanged, and the empty-buffer listen still applies.
+- New mode **`cats_comparison`** plots seven variants on the sweep's axes, writing `results_cats_comparison*`. Fixed-power variants run at both 10 W and 25 W.
+- `run_sweep()` takes an optional roster and `plot_schedulability()` an optional basename/title, so the new mode reuses both without overwriting the sweep's figures.
+- The CLI `belief_threshold` override now also reaches the comparison roster.
+
 ### Listening policy
 
 - **CHARM and CHEDF now listen on belief rather than on a fixed interval.** A periodic `rx_period` listen is an unoptimised stand-in for "is my channel estimate still worth anything", so both adopt the rule CATS already used: confidence decays by `BELIEF_DECAY` on every transmitting slot, a listen restores it, and the scheduler listens once it falls below `belief_threshold`. `rx_period` is removed from the config, the constructors and the roster; `belief_threshold` (default 0.7) replaces it.
