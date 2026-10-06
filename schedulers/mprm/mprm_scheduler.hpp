@@ -23,18 +23,20 @@
    regardless of the state the channel is actually in.
 
    Where it sits: RM and EDF send each frame once at a fixed power. CHARM and
-   CHEDF size the redundancy from a prediction refreshed every rx_period
-   ticks. MPRM and MPEDF size it from average channel quality alone. So an
-   RM/MPRM gap is what redundancy-from-the-average buys over no redundancy,
-   and an MPRM/CHARM gap is what *refreshed* channel information adds on top
-   of knowing only the channel's long-run quality -- which is the baseline
-   this scheduler exists to provide.
+   CHEDF size the redundancy from a prediction they refresh whenever their
+   belief in it decays past a threshold. MPRM and MPEDF size it from average
+   channel quality alone. So an RM/MPRM gap is what redundancy-from-the-average
+   buys over no redundancy, and an MPRM/CHARM gap is what *refreshed* channel
+   information adds on top of knowing only the channel's long-run quality --
+   which is the baseline this scheduler exists to provide.
 
    It never enters RX_MODE. A static estimate learns nothing from listening,
-   so unlike CHARM it spends every slot transmitting or idle; it has no
-   rx_period parameter. This is a deliberate asymmetry and it does mean MPRM
-   gets more transmit opportunities than CHARM at the same rx_period, so an
-   MPRM/CHARM gap mixes the information effect with that airtime difference.
+   so unlike CHARM it spends every slot transmitting or idle, and it has no
+   listening knob at all. This is a deliberate asymmetry and it does mean MPRM
+   gets more transmit opportunities than CHARM, so an MPRM/CHARM gap mixes the
+   information effect with that airtime difference. Since CHARM's listening is
+   belief-driven, the size of that difference is not fixed -- it shrinks as the
+   queue gets busier and CHARM listens less.
 
    Keep in sync with schedulers/mpedf/, which is this policy over an EDF queue
    and differs only in the min_element comparator -- the same arrangement, and

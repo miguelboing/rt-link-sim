@@ -4,7 +4,7 @@
 
 #include "charm_scheduler.hpp"
 
-CHARM_scheduler::CHARM_scheduler(unsigned int tx_power, unsigned int frequency, unsigned int rx_period, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), rx_period(rx_period), transmission_prob(0) {};
+CHARM_scheduler::CHARM_scheduler(unsigned int tx_power, unsigned int frequency, float belief_threshold, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), belief(0.0f), belief_threshold(belief_threshold), transmission_prob(0) {};
 
 scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
 {
@@ -12,13 +12,21 @@ scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
     scheduled_frame.transmission_power = this->tx_power;
     scheduled_frame.frequency = this->frequency;
 
-    if (*(this->system_tick) % this->rx_period == 0) /* Check if it is time to listen to the channel */
+    /* Listen as soon as the estimate is no longer trusted. Belief decays at
+       the channel's own mixing rate, so this replaces the fixed rx_period
+       interval with one the channel's dynamics set. No urgency guard here,
+       unlike CATS: the test is belief alone. */
+    if (this->belief < this->belief_threshold)
     {
         scheduled_frame.radio_mode = RX_MODE;
         scheduled_frame.packet = nullptr;
+        this->belief = 1.0f;
     }
     else /* If it is not try to schedule a packet */
     {
+        /* Belief drops: one more slot since the estimate was refreshed. */
+        this->belief *= BELIEF_DECAY;
+
         /* Find the packet with the smaller period */
         auto lowest_it = std::min_element(this->buffer_packet->begin(),
                                           this->buffer_packet->end(),
@@ -61,8 +69,12 @@ scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
         }
         else
         {
+            /* Nothing rankable to send, so spend the slot listening. That is
+               a real refresh, so the belief this slot just decayed is
+               restored -- as CATS does on the same fallback. */
             scheduled_frame.packet = nullptr;
             scheduled_frame.radio_mode = RX_MODE;
+            this->belief = 1.0f;
         }
     }
 

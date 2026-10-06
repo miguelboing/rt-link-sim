@@ -23,7 +23,7 @@ CATS_scheduler::CATS_scheduler(unsigned int frequency,
 {
     this->transmission_prob[0] = this->transmission_prob[1] = this->transmission_prob[2] = 0.0;
     this->belief = 0.0;
-    this->eigenvalue = 0.99015;
+    this->eigenvalue = BELIEF_DECAY;
 
     /* Horizon = LCM of all task periods. Demand within one hyperperiod is
        exact (every task completes an integer number of releases), so the

@@ -12,7 +12,7 @@ scheduled_frame_t MPRM_scheduler::do_schedule_frame(void)
     scheduled_frame.transmission_power = this->tx_power;
     scheduled_frame.frequency = this->frequency;
 
-    /* No rx_period branch: this scheduler never listens, so every slot is a
+    /* No listening branch at all: this scheduler never listens, so every slot is a
        transmit opportunity. See the class comment. */
 
     /* Find the packet with the smaller period */

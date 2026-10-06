@@ -120,10 +120,12 @@ int main(int argc, char* argv[])
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHARM")
     {
+        /* belief_threshold, not rx_period: listening is belief-driven, the
+           same rule CATS uses. */
         scheduler = std::make_unique<CHARM_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["frequency"],
-            sched_cfg["rx_period"],
+            sched_cfg["belief_threshold"],
             &buffer,
             system_tick
         );
@@ -134,7 +136,7 @@ int main(int argc, char* argv[])
         scheduler = std::make_unique<CHEDF_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["frequency"],
-            sched_cfg["rx_period"],
+            sched_cfg["belief_threshold"],
             &buffer,
             system_tick
         );

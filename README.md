@@ -22,8 +22,8 @@ A packet needs `frames` successful slots before its deadline to count as deliver
 | Type in config | Class | Parameters | Notes |
 |---|---|---|---|
 | `CATS` | `CATS_scheduler` | `frequency`, `belief_threshold`, `utilization_threshold` | Channel and belief aware, picks its own power |
-| `CHARM` | `CHARM_scheduler` | `tx_power`, `frequency`, `rx_period` | Baseline, accumulated-probability retransmission over a period-ordered queue |
-| `CHEDF` | `CHEDF_scheduler` | `tx_power`, `frequency`, `rx_period` | CHARM's policy over a deadline-ordered queue |
+| `CHARM` | `CHARM_scheduler` | `tx_power`, `frequency`, `belief_threshold` | Baseline, accumulated-probability retransmission over a period-ordered queue; listens on belief |
+| `CHEDF` | `CHEDF_scheduler` | `tx_power`, `frequency`, `belief_threshold` | CHARM's policy over a deadline-ordered queue |
 | `MPRM` | `MPRM_scheduler` | `tx_power`, `frequency` | CHARM's redundancy rule driven by a static channel average, period-ordered queue |
 | `MPEDF` | `MPEDF_scheduler` | `tx_power`, `frequency` | The same over a deadline-ordered queue |
 | `EDF` | `EDF_scheduler` | `tx_power`, `frequency` | Fixed-power baseline |
@@ -45,7 +45,7 @@ This isolates what *refreshed* channel information adds beyond knowing only the 
 
 Two consequences worth keeping in mind when reading a figure:
 
-- **They never listen.** A static estimate learns nothing from an RX slot, so MPRM and MPEDF have no `rx_period` and spend every slot transmitting or idle. They therefore get more transmit opportunities than CHARM/CHEDF at the same power, and an MPRM/CHARM gap mixes the information effect with that airtime difference. Read it alongside the energy row.
+- **They never listen.** A static estimate learns nothing from an RX slot, so MPRM and MPEDF have no listening knob and spend every slot transmitting or idle. They therefore get more transmit opportunities than CHARM/CHEDF at the same power, and an MPRM/CHARM gap mixes the information effect with that airtime difference. Read it alongside the energy row. How large that difference is varies with load, since CHARM's listening is belief-driven rather than a fixed share of slots.
 - **The estimate comes from the channel, not from a config field.** `BasePhysicalChannel::mean_probability()` supplies it, and `main.cpp` queries it once at construction. `SigmoidChannel` computes $\pi$ as the stationary distribution of its own transition matrix; `ReplayChannel` returns the empirical decode rate of the recorded window. A new channel has to implement the method — it is pure virtual.
 
 ## Build

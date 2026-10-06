@@ -10,6 +10,21 @@ using json = nlohmann::json;
 #include "system_model/system_model.hpp"
 #include "system_model/buffer_packet/buffer_packet.hpp"
 
+/* Per-tick decay of a scheduler's confidence in the channel estimate it last
+   heard. This is the modulus of the FSMC's second-largest eigenvalue -- the
+   rate at which the chain's state distribution forgets where it started -- so
+   belief tracks how stale the estimate actually is rather than how long ago it
+   arrived. For the 20m ring (0.98 self-loop on a 6-state cycle) that modulus
+   is |0.98 + 0.02 e^{i pi/3}| ~ 0.99015.
+
+   Shared by every belief-driven scheduler (CATS, CHARM, CHEDF) so the three
+   cannot drift apart; it was a bare literal inside CATS before CHARM and CHEDF
+   adopted the same policy. It is a property of the *channel*, not of any
+   scheduler, so if the transition matrix ever changes this constant has to be
+   recomputed with it -- nothing in the build checks the two against each
+   other. */
+inline constexpr float BELIEF_DECAY = 0.99015f;
+
 class BaseScheduler
 {
 public:

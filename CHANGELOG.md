@@ -2,10 +2,19 @@
 
 ## Unreleased
 
+### Listening policy
+
+- **CHARM and CHEDF now listen on belief rather than on a fixed interval.** A periodic `rx_period` listen is an unoptimised stand-in for "is my channel estimate still worth anything", so both adopt the rule CATS already used: confidence decays by `BELIEF_DECAY` on every transmitting slot, a listen restores it, and the scheduler listens once it falls below `belief_threshold`. `rx_period` is removed from the config, the constructors and the roster; `belief_threshold` (default 0.7) replaces it.
+- `BELIEF_DECAY` moved out of CATS into `schedulers/base_scheduler.hpp` so the three belief-driven schedulers share one definition. It is the modulus of the FSMC's second-largest eigenvalue, a property of the channel: recompute it if the transition matrix changes.
+- CHARM/CHEDF listen on belief alone, without CATS's `no_urgent_packet` guard, so a listen can consume a slot a near-deadline packet needed.
+- The CLI's `belief_threshold` argument now applies to every belief-driven scheduler, not only CATS, and prints which ones it touched.
+- **No fixed-interval listener remains in the roster**, so the figures no longer carry a periodic-vs-belief control and nothing is "CHARM as published" any more.
+- Measured against the previous build on identical task sets: RX share fell from a forced 20% to ~13% at U=0.5 and ~3.8% at U=0.8, schedulability was equal or better everywhere sampled, energy rose ~15% as freed slots went to transmitting, and CHARM's worst burst at U=0.8 fell from 684 to 85.
+
 ### Schedulers
 
 - Added **MPRM** ("Mean-Predictor RM") and **MPEDF** ("Mean-Predictor EDF") — MP for the mean predictor they run on: CHARM's accumulated-probability redundancy rule driven by a *static* estimate of the channel instead of a refreshed prediction. The estimate is the channel's long-run mean decode probability at the scheduler's transmit power, `rho_bar_j = sum_s pi_s rho_s(SNR(P_j))`, fixed before the run starts, so the redundancy allocated to each frame is deterministic. They sit between the fixed-power baselines and the CHARM family, and exist to measure what *refreshed* channel information adds beyond knowing the channel's average quality.
-- MPRM and MPEDF never enter RX_MODE and take no `rx_period`: a static estimate learns nothing from listening. They therefore spend every slot transmitting or idle, which also makes them cheaper in airtime than CHARM/CHEDF at the same power.
+- MPRM and MPEDF never enter RX_MODE and take no listening knob: a static estimate learns nothing from listening. They therefore spend every slot transmitting or idle, which also makes them cheaper in airtime than CHARM/CHEDF at the same power.
 - `MPEDF_scheduler` is a deliberate copy of `MPRM_scheduler` differing only in the queue comparator, mirroring the existing CHARM/CHEDF arrangement and carrying the same keep-in-sync requirement.
 
 ### Channel

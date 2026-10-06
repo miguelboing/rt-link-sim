@@ -211,12 +211,22 @@ def make_config(test: dict, seed: Optional[int] = None) -> dict:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-# CHARM as published: dequeues by shortest period (rate-monotonic order).
+# CHARM: dequeues by shortest period (rate-monotonic order), with
+# belief-driven listening rather than the published fixed `rx_period`
+# interval. Confidence in the last prediction decays at the channel's own
+# mixing rate and a listen restores it, so the scheduler refreshes when the
+# estimate has actually gone stale instead of on a tuned clock — the interval
+# stops being a parameter and `belief_threshold` takes its place.
+#
+# Note this is *not* CHARM as published any more. There is no fixed-interval
+# listener left in the roster, so the figures no longer carry a periodic-vs-
+# belief control; a CHARM/CATS gap is now queue discipline, power policy and
+# early dropping, but no longer the listening rule.
 BASE_SCHEDULER = {
     "type": "CHARM",
     "tx_power": 10,
     "frequency": 14074000,
-    "rx_period": 5,
+    "belief_threshold": 0.7,
 }
 
 BASE_SCHEDULER_25W = dict(BASE_SCHEDULER, tx_power=25)
@@ -389,18 +399,20 @@ BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 # FSMC's stationary distribution.
 #
 # The C++ side computes rho_bar from the channel at construction, which is why
-# these take no `rx_period` and carry no knob for one: a static estimate
-# learns nothing from an RX slot, so MPRM/MPEDF never listen and spend every
-# slot transmitting or idle. That makes them strictly cheaper in airtime than
-# CHARM/CHEDF at the same power — an MPRM/CHARM gap mixes the value of
-# refreshed channel information with that airtime difference, so read it
-# alongside the energy row rather than on its own.
+# these take no listening knob at all: a static estimate learns nothing from
+# an RX slot, so MPRM/MPEDF never listen and spend every slot transmitting or
+# idle. That makes them cheaper in airtime than CHARM/CHEDF at the same power
+# — an MPRM/CHARM gap mixes the value of refreshed channel information with
+# that airtime difference, so read it alongside the energy row rather than on
+# its own. How large that difference is is no longer fixed, either: CHARM's
+# listening is belief-driven now, so its RX share varies with the channel
+# instead of being 1 slot in rx_period.
 #
 # They occupy the middle of the roster's ladder of channel knowledge:
 #   RM/EDF       — one send per frame, no channel knowledge
-#   MPRM/MPEDF     — redundancy from the channel's long-run average
-#   CHARM/CHEDF  — redundancy from a prediction refreshed every rx_period
-#   CATS         — belief-driven, and picks its power too
+#   MPRM/MPEDF   — redundancy from the channel's long-run average, never listens
+#   CHARM/CHEDF  — redundancy from a belief-driven refreshed prediction
+#   CATS         — the same listening rule, and picks its power too
 BASE_MPRM_SCHEDULER      = {"type": "MPRM",  "tx_power": 10, "frequency": 14074000}
 BASE_MPRM_SCHEDULER_25W  = dict(BASE_MPRM_SCHEDULER, tx_power=25)
 BASE_MPEDF_SCHEDULER     = {"type": "MPEDF", "tx_power": 10, "frequency": 14074000}
@@ -423,12 +435,17 @@ BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
 #   scheduler    listening          power      redundancy                drops early
 #   RM_10W       none               10 W       none, one send per frame  no
 #   EDF_10W      none               10 W       none, one send per frame  no
-#   MPEDF_10W     none               10 W       static channel average    no
-#   CHARM_10W    every rx_period    10 W       refreshed estimate        no
-#   CHARM_25W    every rx_period    25 W       refreshed estimate        no
-#   CHEDF_10W    every rx_period    10 W       refreshed estimate        no
-#   CHEDF_25W    every rx_period    25 W       refreshed estimate        no
-#   CATS         adaptive           adaptive   refreshed estimate        yes
+#   MPEDF_10W    none               10 W       static channel average    no
+#   CHARM_10W    belief             10 W       refreshed estimate        no
+#   CHARM_25W    belief             25 W       refreshed estimate        no
+#   CHEDF_10W    belief             10 W       refreshed estimate        no
+#   CHEDF_25W    belief             25 W       refreshed estimate        no
+#   CATS         belief + urgency   adaptive   refreshed estimate        yes
+#
+# "belief" is the shared rule: confidence in the last prediction decays at the
+# channel's mixing rate and a listen restores it. CATS additionally refuses to
+# listen while a packet is near its deadline; CHARM/CHEDF listen on belief
+# alone, so a listen there can consume a slot an urgent packet needed.
 #
 # Early dropping is not a knob: it is built into CATS (it discards a packet
 # whose remaining slots cannot cover its reliability target) and no other
@@ -1974,8 +1991,18 @@ if __name__ == "__main__":
                  f"<run_name> [belief_threshold] [utilization_threshold]")
 
     if belief_threshold is not None:
-        BASE_CATS_SCHEDULER["belief_threshold"] = belief_threshold
-        print(f"CATS belief_threshold overridden to {belief_threshold}")
+        # Applies to *every* belief-driven scheduler, not just CATS: CHARM and
+        # CHEDF listen on the same rule now, and moving CATS's threshold while
+        # leaving theirs at the default would silently compare schedulers
+        # under different listening policies. The names are printed so the
+        # reach of the override is visible in the run header.
+        touched = sorted({name for roster in (SCHEDULERS, ERROR_SWEEP_SCHEDULERS)
+                          for name, cfg in roster if "belief_threshold" in cfg})
+        for roster in (SCHEDULERS, ERROR_SWEEP_SCHEDULERS):
+            for _name, cfg in roster:
+                if "belief_threshold" in cfg:
+                    cfg["belief_threshold"] = belief_threshold
+        print(f"belief_threshold overridden to {belief_threshold} for: {', '.join(touched)}")
 
     if utilization_threshold is not None:
         BASE_CATS_SCHEDULER["utilization_threshold"] = utilization_threshold
