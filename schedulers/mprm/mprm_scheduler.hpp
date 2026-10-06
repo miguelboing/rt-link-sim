@@ -5,7 +5,7 @@
 
 #include "schedulers/base_scheduler.hpp"
 
-/* SRM -- "Static RM". Rate-monotonic dequeue order with CHARM's
+/* MPRM -- "Mean-Predictor RM". Rate-monotonic dequeue order with CHARM's
    accumulated-probability redundancy rule, driven by a *static* estimate of
    the channel instead of a refreshed prediction.
 
@@ -24,31 +24,31 @@
 
    Where it sits: RM and EDF send each frame once at a fixed power. CHARM and
    CHEDF size the redundancy from a prediction refreshed every rx_period
-   ticks. SRM and SEDF size it from average channel quality alone. So an
-   RM/SRM gap is what redundancy-from-the-average buys over no redundancy,
-   and an SRM/CHARM gap is what *refreshed* channel information adds on top
+   ticks. MPRM and MPEDF size it from average channel quality alone. So an
+   RM/MPRM gap is what redundancy-from-the-average buys over no redundancy,
+   and an MPRM/CHARM gap is what *refreshed* channel information adds on top
    of knowing only the channel's long-run quality -- which is the baseline
    this scheduler exists to provide.
 
    It never enters RX_MODE. A static estimate learns nothing from listening,
    so unlike CHARM it spends every slot transmitting or idle; it has no
-   rx_period parameter. This is a deliberate asymmetry and it does mean SRM
+   rx_period parameter. This is a deliberate asymmetry and it does mean MPRM
    gets more transmit opportunities than CHARM at the same rx_period, so an
-   SRM/CHARM gap mixes the information effect with that airtime difference.
+   MPRM/CHARM gap mixes the information effect with that airtime difference.
 
-   Keep in sync with schedulers/sedf/, which is this policy over an EDF queue
+   Keep in sync with schedulers/mpedf/, which is this policy over an EDF queue
    and differs only in the min_element comparator -- the same arrangement, and
    the same hazard, as CHARM/CHEDF. */
-class SRM_scheduler : public BaseScheduler
+class MPRM_scheduler : public BaseScheduler
 {
 public:
-    SRM_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
+    MPRM_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
 
     unsigned int tx_power;
     unsigned int frequency;
 
     /* Static long-run decode probability at tx_power. Fixed for the whole
-       run; this is the one input that distinguishes SRM from CHARM. */
+       run; this is the one input that distinguishes MPRM from CHARM. */
     double mean_prob;
 
     std::unordered_map<uint64_t, double> accumulated_prob;

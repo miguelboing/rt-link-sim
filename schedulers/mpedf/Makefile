@@ -1,4 +1,4 @@
-TARGET=sedf_scheduler
+TARGET=mpedf_scheduler
 
 ifndef BUILD_DIR
 	BUILD_DIR=$(CUR_DIR)

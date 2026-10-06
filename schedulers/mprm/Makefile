@@ -1,4 +1,4 @@
-TARGET=srm_scheduler
+TARGET=mprm_scheduler
 
 ifndef BUILD_DIR
 	BUILD_DIR=$(CUR_DIR)

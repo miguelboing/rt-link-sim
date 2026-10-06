@@ -2,11 +2,11 @@
 #include <cmath>
 #include <numeric>
 
-#include "srm_scheduler.hpp"
+#include "mprm_scheduler.hpp"
 
-SRM_scheduler::SRM_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), mean_prob(mean_prob) {};
+MPRM_scheduler::MPRM_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), mean_prob(mean_prob) {};
 
-scheduled_frame_t SRM_scheduler::do_schedule_frame(void)
+scheduled_frame_t MPRM_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
     scheduled_frame.transmission_power = this->tx_power;
@@ -67,8 +67,8 @@ scheduled_frame_t SRM_scheduler::do_schedule_frame(void)
     return scheduled_frame;
 }
 
-std::string SRM_scheduler::get_name() const {
+std::string MPRM_scheduler::get_name() const {
     /* Power is part of the name so runs at different tx_power don't overwrite
        each other's scheduled-packet logs. */
-    return "SRM_" + std::to_string(this->tx_power) + "W";
+    return "MPRM_" + std::to_string(this->tx_power) + "W";
 }

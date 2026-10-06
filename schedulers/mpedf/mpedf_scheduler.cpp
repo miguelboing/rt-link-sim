@@ -2,11 +2,11 @@
 #include <cmath>
 #include <numeric>
 
-#include "sedf_scheduler.hpp"
+#include "mpedf_scheduler.hpp"
 
-SEDF_scheduler::SEDF_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), mean_prob(mean_prob) {};
+MPEDF_scheduler::MPEDF_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), mean_prob(mean_prob) {};
 
-scheduled_frame_t SEDF_scheduler::do_schedule_frame(void)
+scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
     scheduled_frame.transmission_power = this->tx_power;
@@ -16,10 +16,10 @@ scheduled_frame_t SEDF_scheduler::do_schedule_frame(void)
        transmit opportunity. See the class comment. */
 
     /* Find the packet with the earliest deadline. This is the one line of
-       policy that separates SEDF from SRM -- everything below is SRM's
+       policy that separates MPEDF from MPRM -- everything below is MPRM's
        redundancy rule, kept identical on purpose.
 
-       Unlike SRM's period comparator this needs no is_periodic guard: a
+       Unlike MPRM's period comparator this needs no is_periodic guard: a
        deadline is well defined for aperiodic packets too, so every buffered
        packet is rankable and none has to be skipped. */
     auto lowest_it = std::min_element(this->buffer_packet->begin(),
@@ -71,10 +71,10 @@ scheduled_frame_t SEDF_scheduler::do_schedule_frame(void)
     return scheduled_frame;
 }
 
-std::string SEDF_scheduler::get_name() const {
+std::string MPEDF_scheduler::get_name() const {
     /* Power is part of the name so runs at different tx_power don't overwrite
-       each other's scheduled-packet logs. A separate class from SRM, so this
+       each other's scheduled-packet logs. A separate class from MPRM, so this
        is the easiest line to forget to change when copying -- the pair would
        then collide on the same log. */
-    return "SEDF_" + std::to_string(this->tx_power) + "W";
+    return "MPEDF_" + std::to_string(this->tx_power) + "W";
 }
