@@ -22,12 +22,12 @@ The simulator reproduces the system model from that diagram, one directory per b
 
 | Block in the figure | Where it lives |
 |---|---|
-| Application load, `a_n = (T_n, D_n, L_n, θ_n, φ_n)` | `packet_generators/fixed_rate/` |
-| Packet buffer, `Q(t)` / `V(t)` | `system_model/buffer_packet/` |
-| Scheduler, `u(t)` and `m(t)` | `schedulers/` |
+| Application load, $a_n = (T_n, D_n, L_n, \theta_n, \varphi_n)$ | `packet_generators/fixed_rate/` |
+| Packet buffer, $\mathcal{Q}(t)$ / $\mathcal{V}(t)$ | `system_model/buffer_packet/` |
+| Scheduler, $u(t)$ and $m(t)$ | `schedulers/` |
 | Radio interface, TX/RX | `system_model/radio_interface/`, `system_model/target_receiver/` |
 | Physical channel | `physical_channels/sigmoid_channel/` |
-| Decoding probability predictor, `ρ̂(t)` | `system_model/ml_predictor/` |
+| Decoding probability predictor, $\hat{\rho}(t)$ | `system_model/ml_predictor/` |
 | Network of receivers / offline dataset | `physical_channels/replay_channel/`, `hf_experiment/` |
 
 A simulation advances one frame (time-slot) per tick. On every tick the generators release packets into the buffer, the predictor reports a decode probability per power level, the scheduler picks one buffered packet and a power or else idles or listens, the channel draws the outcome, and the buffer discards anything whose deadline has passed. A packet needs `frames` successful slots before its deadline to count as delivered.
@@ -38,8 +38,8 @@ The dashed path through the offline dataset is the replay experiment. The solid 
 
 The physical channel is a finite-state Markov chain. Each state carries a sigmoid decode curve giving the probability of decoding a frame at a given SNR:
 
-```
-ρ_s(SNR) = γ_s / (1 + exp(-α_s · (SNR − β_s)))
+```math
+\rho_s(\mathrm{SNR}) = \frac{\gamma_s}{1 + \exp\!\left(-\alpha_s \left(\mathrm{SNR} - \beta_s\right)\right)}
 ```
 
 Both the chain and the curves are data rather than code, so a different channel is a different pair of files. The example shipped in `physical_channels/channel_20m/` is a 6-state ring carrying three distinct curves, mirrored so the walk descends from Good to Poor and climbs back:

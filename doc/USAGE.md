@@ -215,12 +215,12 @@ The physical channel is a finite-state Markov chain. The chain supplies the
 state sequence, and each state carries a sigmoid decode curve giving the
 probability of decoding a frame at a given SNR:
 
-```
-ρ_s(SNR) = γ_s / (1 + exp(-α_s · (SNR − β_s)))
+```math
+\rho_s(\mathrm{SNR}) = \frac{\gamma_s}{1 + \exp\!\left(-\alpha_s \left(\mathrm{SNR} - \beta_s\right)\right)}
 ```
 
-with `α` the slope, `β` the SNR at which the curve reaches half its ceiling,
-and `γ` the saturation ceiling.
+with $\alpha$ the slope, $\beta$ the SNR at which the curve reaches half
+its ceiling, and $\gamma$ the saturation ceiling.
 
 **Both halves are data, not code.** A channel is a directory under
 `physical_channels/` holding two files, read at construction:
@@ -255,7 +255,7 @@ lap about 300. Mirroring them as a triangle (`G, M, P, P, M, G`) makes the walk
 descend from Good to Poor and climb back, rather than jumping from worst
 straight to best at the wrap.
 
-| Curve | α (slope) | β (snr50) | γ (ceiling) | 1 W | 10 W | 25 W |
+| Curve | $\alpha$ (slope) | $\beta$ (snr50) | $\gamma$ (ceiling) | 1 W | 10 W | 25 W |
 |---|---|---|---|---|---|---|
 | Good | 0.4 | 10 | 0.95 | 0.475 | 0.933 | 0.946 |
 | Moderate | 0.3 | 15 | 0.85 | 0.155 | 0.695 | 0.796 |
