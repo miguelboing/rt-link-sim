@@ -65,7 +65,7 @@ sacct -u $USER --starttime=$(date -d '7 days ago' +%F)    # week of history
 seff <jobid>                    # human-readable CPU/mem efficiency report
 ```
 
-`seff` is the quickest sanity check after a run finished — tells you if you over- or under-requested resources.
+`seff` is the quickest sanity check after a run finished. It tells you if you over- or under-requested resources.
 
 ## Cluster info
 
@@ -106,9 +106,9 @@ scancel <jobid>                   # cancel whole array
 
 - **The conda env must exist before you submit.** `run_slurm.sh` activates `rt-link-sim`, falling back to the pre-rename name `cats-scheduler`. A job that dies immediately with `EnvironmentNameNotFound: Could not find conda environment` has neither. Create it once on a login node with `conda create -n rt-link-sim python=3.12 numpy matplotlib`, rename an existing one with `conda rename -n cats-scheduler rt-link-sim`, or point the script elsewhere with `sbatch --export=CONDA_ENV=my-env,ALL ...`.
 - **Don't `make` inside the job.** `run_slurm.sh` deliberately skips the build because concurrent jobs race on `main.o` (Makefile `rm`s it then recreates it, leaving a window where the binary is missing). Always run `make` on a login node before `sbatch`.
-- **Login node is shared.** Heavy `make`/Python on the login node will make you unpopular — use `srun --pty bash` for anything non-trivial.
+- **Login node is shared.** Heavy `make`/Python on the login node will make you unpopular, so use `srun --pty bash` for anything non-trivial.
 - **Time limit is wall clock**, not CPU time. With `--cpus-per-task=32` and `--time=04:00:00`, you have 4 hours wall, not 128 CPU-hours.
-- **`--mem-per-cpu=1G`** combined with `--cpus-per-task=32` requests 32 GB total. Sweep mode (the default) only emits a tiny summary file per sim, so workers stay at tens of MB. Tests mode parses the full ~180 MB JSON log per worker — bump to `--mem-per-cpu=2G` if running tests with many parallel runs. Mixing `--mem` and `--mem-per-cpu` is rejected.
+- **`--mem-per-cpu=1G`** combined with `--cpus-per-task=32` requests 32 GB total. Sweep mode (the default) only emits a tiny summary file per sim, so workers stay at tens of MB. Tests mode parses the full ~180 MB JSON log per worker, so bump to `--mem-per-cpu=2G` if running tests with many parallel runs. Mixing `--mem` and `--mem-per-cpu` is rejected.
 
 ## Useful env vars inside a job
 
