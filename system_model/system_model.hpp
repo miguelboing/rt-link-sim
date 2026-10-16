@@ -63,6 +63,5 @@ typedef struct
     double snr_50_db;        /* beta: SNR for 50% success rate */
     double slope;            /* alpha: Steepness of sigmoid curve */
     double max_saturation;   /* gamma: The maximum possible transmission power when tx_power -> inf */
-    double noise_floor_dbm;  /* Noise power in dBm */
 } markov_state_t;
 

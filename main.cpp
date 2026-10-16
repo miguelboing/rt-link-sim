@@ -549,8 +549,7 @@ int main(int argc, char* argv[])
                 std::cout << "Parameters"
                           << "\nSlope: " << sc->fsmc[fsmc_state].slope
                           << "\nSNR@50% [dB]: " << sc->fsmc[fsmc_state].snr_50_db
-                          << "\nMax Saturation: " << sc->fsmc[fsmc_state].max_saturation
-                          << "\nNoise Floor [dBm]: " << sc->fsmc[fsmc_state].noise_floor_dbm;
+                          << "\nMax Saturation: " << sc->fsmc[fsmc_state].max_saturation;
                 std::cout << std::endl << std::endl;
 
                 frame_entry["fsmc"].push_back({
@@ -558,8 +557,7 @@ int main(int argc, char* argv[])
                     {"state",           fsmc_state},
                     {"slope",           sc->fsmc[fsmc_state].slope},
                     {"snr_50_db",       sc->fsmc[fsmc_state].snr_50_db},
-                    {"max_saturation",  sc->fsmc[fsmc_state].max_saturation},
-                    {"noise_floor_dbm", sc->fsmc[fsmc_state].noise_floor_dbm}
+                    {"max_saturation",  sc->fsmc[fsmc_state].max_saturation}
                 });
             }
 

@@ -228,7 +228,7 @@ its ceiling, and $\gamma$ the saturation ceiling.
 | File | What it is |
 |---|---|
 | `transition_matrix.kov` | The chain, one row per state, comma- or space-separated. Rows need not be normalised. |
-| `fsmc_states.json` | One object per state, in the same order as the matrix rows: `{snr_50_db, slope, max_saturation, noise_floor_dbm}`. All four keys are **required**, because the loader indexes them directly and throws on a missing one. `noise_floor_dbm` is currently dead: the noise term in `gen_probability()` is commented out, so received power is used directly as the SNR and only the other three affect results. |
+| `fsmc_states.json` | One object per state, in the same order as the matrix rows: `{snr_50_db, slope, max_saturation}`. All three keys are **required**, because the loader indexes them directly and throws on a missing one. There is no noise-floor field: received power is used directly as the SNR, so the noise floor is folded into each state's `snr_50_db` rather than carried separately. |
 
 Drop in any transition matrix and any set of curves and the simulator runs
 against them. Point `channels[].name` at the new directory. Two caveats:

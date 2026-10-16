@@ -34,8 +34,7 @@ SigmoidChannel::SigmoidChannel(unsigned int frequency, const std::string& channe
         ({
             s["snr_50_db"],
             s["slope"],
-            s["max_saturation"],
-            s["noise_floor_dbm"]
+            s["max_saturation"]
         });
     }
 
@@ -110,8 +109,12 @@ double SigmoidChannel::state_probability(std::size_t state, unsigned int transmi
     /* Power after pathloss */
     const double rx_power_dbm = tx_power_dbm - this->pathloss_db;
 
-    /* SNR considering the noisefloor */
-    const double snr_db = rx_power_dbm; //- this->fsmc[state].noise_floor_dbm;
+    /* Received power is used directly as the SNR. The link budget lives in
+       pathloss_db above, which fixes the operating points at 10, 20 and 24 dB
+       for 1, 10 and 25 W; each state's snr_50_db is calibrated against those.
+       A separate noise floor would only shift every operating point by a
+       constant, so it is folded into snr_50_db rather than carried per state. */
+    const double snr_db = rx_power_dbm;
 
     /* Calculating the probability on the sigmoid slope */
     return this->fsmc[state].max_saturation / (1.0 + exp(-(this->fsmc[state].slope) * (snr_db - (this->fsmc[state].snr_50_db))));

@@ -628,7 +628,6 @@ class FsmcStatus:
     slope: float
     snr_50_db: float
     max_saturation: float
-    noise_floor_dbm: float
 
 @dataclass
 class Frame:
@@ -711,10 +710,9 @@ def print_test_summary(test: dict):
     print(f"\n── Test: {test['name']} ──")
     sched = cfg['scheduler']
     tx_power_str = f"  tx_power={sched['tx_power']}W" if 'tx_power' in sched else ""
-    rx_period_str = f"  rx_period={sched['rx_period']}" if 'rx_period' in sched else ""
     belief_str = f"  belief_threshold={sched['belief_threshold']}" if 'belief_threshold' in sched else ""
     util_str = f"  util_threshold={sched['utilization_threshold']}" if 'utilization_threshold' in sched else ""
-    print(f"   Scheduler  : {sched['type']}{tx_power_str}  freq={sched['frequency']}Hz{rx_period_str}{belief_str}{util_str}")
+    print(f"   Scheduler  : {sched['type']}{tx_power_str}  freq={sched['frequency']}Hz{belief_str}{util_str}")
     print(f"   Duration   : {cfg['simulation']['duration']} ticks")
     print(f"   Channels   : {', '.join(ch['name'] for ch in cfg['channels'])}")
     print(f"   Packets:")
