@@ -27,8 +27,7 @@ The simulator reproduces the system model from that diagram, one directory per b
 | Scheduler | $`u(t)`$, $`m(t)`$ | `schedulers/` |
 | Radio interface | TX, RX | `system_model/radio_interface/`, `system_model/target_receiver/` |
 | Physical channel | | `physical_channels/sigmoid_channel/` |
-| Decoding probability predictor | $`\hat{\rho}(t)`$ | `system_model/ml_predictor/` |
-| Network of receivers / offline dataset | | `physical_channels/replay_channel/`, `hf_experiment/` |
+| Decoding probability predictor | $`{\hat{\rho}(t)}`$ | `system_model/ml_predictor/` |
 
 A simulation advances one frame (time-slot) per tick. On every tick the generators release packets into the buffer, the predictor reports a decode probability per power level, the scheduler picks one buffered packet and a power or else idles or listens, the channel draws the outcome, and the buffer discards anything whose deadline has passed. A packet needs `frames` successful slots before its deadline to count as delivered.
 
