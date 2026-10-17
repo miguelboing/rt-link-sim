@@ -1,5 +1,7 @@
 # rt-link-sim
 
+[![DOI](https://zenodo.org/badge/1058596420.svg)](https://zenodo.org/badge/latestdoi/1058596420)
+
 Real-time scheduling over an unreliable link. A C++ simulator for wireless packet scheduling under deadline and channel-quality constraints, driven by a Python experiment harness.
 
 It models the whole path from application load to decoded frame: periodic tasks with deadlines and reliability requirements, a packet buffer, a scheduler choosing when to transmit and at what power, a radio interface, a finite-state Markov channel, and a decode-probability predictor. Each piece is replaceable.
