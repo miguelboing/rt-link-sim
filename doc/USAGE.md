@@ -167,7 +167,7 @@ long-run mean decode probability at the scheduler's transmit power,
 \bar{\rho}_j = \sum_s \pi_s \, \rho_s\!\left(\mathrm{SNR}(P_j)\right)
 ```
 
-where $\rho_s$ is the decode probability of channel state $s$ and $\pi_s$ is
+where $`\rho_s`$ is the decode probability of channel state $`s`$ and $`\pi_s`$ is
 the long-run fraction of time the channel spends in that state, so the more
 frequent conditions weigh more. They then allocate redundant transmissions from
 that average with the accumulated-probability rule all four share. Because
@@ -190,7 +190,7 @@ Two consequences worth keeping in mind when reading a figure:
   slots.
 - **The estimate comes from the channel, not from a config field.**
   `BasePhysicalChannel::mean_probability()` supplies it and `main.cpp` queries
-  it once at construction. `SigmoidChannel` computes $\pi$ as the stationary
+  it once at construction. `SigmoidChannel` computes $`\pi`$ as the stationary
   distribution of its own transition matrix; `ReplayChannel` returns the
   empirical decode rate of the recorded window. A new channel has to implement
   the method, which is pure virtual.
@@ -219,8 +219,8 @@ probability of decoding a frame at a given SNR:
 \rho_s(\mathrm{SNR}) = \frac{\gamma_s}{1 + \exp\!\left(-\alpha_s \left(\mathrm{SNR} - \beta_s\right)\right)}
 ```
 
-with $\alpha$ the slope, $\beta$ the SNR at which the curve reaches half
-its ceiling, and $\gamma$ the saturation ceiling.
+with $`\alpha`$ the slope, $`\beta`$ the SNR at which the curve reaches half
+its ceiling, and $`\gamma`$ the saturation ceiling.
 
 **Both halves are data, not code.** A channel is a directory under
 `physical_channels/` holding two files, read at construction:
@@ -255,7 +255,7 @@ lap about 300. Mirroring them as a triangle (`G, M, P, P, M, G`) makes the walk
 descend from Good to Poor and climb back, rather than jumping from worst
 straight to best at the wrap.
 
-| Curve | $\alpha$ (slope) | $\beta$ (snr50) | $\gamma$ (ceiling) | 1 W | 10 W | 25 W |
+| Curve | $`\alpha`$ (slope) | $`\beta`$ (snr50) | $`\gamma`$ (ceiling) | 1 W | 10 W | 25 W |
 |---|---|---|---|---|---|---|
 | Good | 0.4 | 10 | 0.95 | 0.475 | 0.933 | 0.946 |
 | Moderate | 0.3 | 15 | 0.85 | 0.155 | 0.695 | 0.796 |
