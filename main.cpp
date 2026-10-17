@@ -11,6 +11,7 @@
 #include <streambuf>
 #include <cstdint>
 #include <cmath>
+#include <stdexcept>
 
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -120,10 +121,12 @@ int main(int argc, char* argv[])
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHARM")
     {
+        /* belief_threshold, not rx_period: listening is belief-driven, the
+           same rule CATS uses. */
         scheduler = std::make_unique<CHARM_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["frequency"],
-            sched_cfg["rx_period"],
+            sched_cfg["belief_threshold"],
             &buffer,
             system_tick
         );
@@ -134,10 +137,73 @@ int main(int argc, char* argv[])
         scheduler = std::make_unique<CHEDF_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["frequency"],
-            sched_cfg["rx_period"],
+            sched_cfg["belief_threshold"],
             &buffer,
             system_tick
         );
+    }
+    else if (sched_type == "MPRM" || sched_type == "MPEDF")
+    {
+        /* Static-channel schedulers. They size their redundancy from the
+           channel's long-run mean decode probability at their transmit power,
+
+               rho_bar_j = sum_s pi_s rho_s(SNR(P_j))
+
+           which is computed once, here, rather than delivered as a
+           prediction: MPRM/MPEDF never enter RX_MODE, so nothing would ever
+           hand them the value at run time. See
+           BasePhysicalChannel::mean_probability(). */
+        const unsigned int sched_tx_power  = sched_cfg["tx_power"];
+        const unsigned int sched_frequency = sched_cfg["frequency"];
+
+        auto ch_it = std::find_if(channels->begin(), channels->end(),
+            [sched_frequency](const std::unique_ptr<BasePhysicalChannel>& ch) {
+                return ch->frequency == sched_frequency;
+            });
+
+        if (ch_it == channels->end())
+        {
+            std::cerr << "ERROR: " << sched_type << " found no channel at frequency "
+                      << sched_frequency << std::endl;
+            return -1;
+        }
+
+        const double mean_prob = (*ch_it)->mean_probability(sched_tx_power);
+
+        /* A non-positive static estimate can never accumulate to a
+           reliability target, so every packet would be retransmitted until
+           its deadline. That is a mis-specified channel rather than a policy
+           choice, so say so instead of silently saturating the link. */
+        if (mean_prob <= 0.0)
+            std::cerr << "WARNING: static mean decode probability at " << sched_tx_power
+                      << "W is " << mean_prob
+                      << " - no packet can reach its reliability target." << std::endl;
+
+        if (!summary_only)
+            std::cout << "Static mean decode probability at " << sched_tx_power << "W: "
+                      << mean_prob << std::endl;
+
+        if (sched_type == "MPRM")
+        {
+            scheduler = std::make_unique<MPRM_scheduler>(
+                sched_tx_power,
+                sched_frequency,
+                mean_prob,
+                &buffer,
+                system_tick
+            );
+        }
+        else
+        {
+            /* MPRM's policy over an EDF queue -- same parameters. */
+            scheduler = std::make_unique<MPEDF_scheduler>(
+                sched_tx_power,
+                sched_frequency,
+                mean_prob,
+                &buffer,
+                system_tick
+            );
+        }
     }
     else if (sched_type == "EDF")
     {
@@ -168,14 +234,33 @@ int main(int argc, char* argv[])
             periodic_tasks.insert(periodic_tasks.end(), t.begin(), t.end());
         }
 
-        scheduler = std::make_unique<CATS_scheduler>(
-            sched_cfg["frequency"],
-            sched_cfg["belief_threshold"],
-            sched_cfg["utilization_threshold"],
-            periodic_tasks,
-            &buffer,
-            system_tick
-        );
+        /* The three ablation switches default to enabled, so a config that
+           omits them is the published CATS. `tx_power` is only read when
+           adaptive_power is false. */
+        /* The constructor rejects a fixed tx_power that is not a predictor
+           tier. Report it like any other bad config rather than letting the
+           exception abort the process -- a sweep worker would otherwise see
+           SIGABRT and no explanation. */
+        try
+        {
+            scheduler = std::make_unique<CATS_scheduler>(
+                sched_cfg["frequency"],
+                sched_cfg["belief_threshold"],
+                sched_cfg["utilization_threshold"],
+                periodic_tasks,
+                sched_cfg.value("adaptive_power", true),
+                sched_cfg.value("tx_power", 25U),
+                sched_cfg.value("early_drop", true),
+                sched_cfg.value("urgency_check", true),
+                &buffer,
+                system_tick
+            );
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "ERROR: " << e.what() << std::endl;
+            return -1;
+        }
     }
     else
     {
@@ -464,8 +549,7 @@ int main(int argc, char* argv[])
                 std::cout << "Parameters"
                           << "\nSlope: " << sc->fsmc[fsmc_state].slope
                           << "\nSNR@50% [dB]: " << sc->fsmc[fsmc_state].snr_50_db
-                          << "\nMax Saturation: " << sc->fsmc[fsmc_state].max_saturation
-                          << "\nNoise Floor [dBm]: " << sc->fsmc[fsmc_state].noise_floor_dbm;
+                          << "\nMax Saturation: " << sc->fsmc[fsmc_state].max_saturation;
                 std::cout << std::endl << std::endl;
 
                 frame_entry["fsmc"].push_back({
@@ -473,8 +557,7 @@ int main(int argc, char* argv[])
                     {"state",           fsmc_state},
                     {"slope",           sc->fsmc[fsmc_state].slope},
                     {"snr_50_db",       sc->fsmc[fsmc_state].snr_50_db},
-                    {"max_saturation",  sc->fsmc[fsmc_state].max_saturation},
-                    {"noise_floor_dbm", sc->fsmc[fsmc_state].noise_floor_dbm}
+                    {"max_saturation",  sc->fsmc[fsmc_state].max_saturation}
                 });
             }
 

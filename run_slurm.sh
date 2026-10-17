@@ -8,17 +8,25 @@
 #SBATCH --mem-per-cpu=1G
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-# Resource sizing (post -O2 + summary-mode optimization). Estimates below are
-# for the current 5-scheduler roster (RM/CHARM at both 10 W and 25 W, + CATS);
-# they were ~1.6x lower back when SCHEDULERS held only 3 entries, so rescale
-# if you add or drop a scheduler.
-#   - sweep       @ 100k ticks, n_runs=2:   ~2 min wall on 32 CPUs
-#   - sweep       @ 100k ticks, n_runs=50:  ~8 min  (prior default)
-#   - sweep       @ 100k ticks, n_runs=500: ~75 min
-#   - error_sweep @ 250k ticks, n_runs=50:  ~50 min  (scales with len(PREDICT_ERRORS) and
-#                                                    duration; RM is dedup'd across errors)
-#   - error_sweep @ 250k ticks, n_runs=500: ~8 h  -- exceeds the 5 h default below,
+# Resource sizing (post -O2 + summary-mode optimization). Wall time is roughly
+# linear in the number of roster entries, so the figures below are the ones
+# measured on the old 5-entry roster scaled to the current rosters: SCHEDULERS
+# holds 8 (RM, EDF, MPEDF at 10 W; CHARM and CHEDF at 10 W and 25 W; CATS) and
+# ERROR_SWEEP_SCHEDULERS holds 7. They are extrapolations, not measurements --
+# re-time a cheap run before committing to a --time on a long job, and rescale
+# again if you add or drop a scheduler.
+#   - sweep       @ 100k ticks, n_runs=2:   ~3 min wall on 32 CPUs
+#   - sweep       @ 100k ticks, n_runs=50:  ~13 min
+#   - sweep       @ 100k ticks, n_runs=500: ~2 h
+#   - error_sweep @ 250k ticks, n_runs=50:  ~60 min  (scales with len(PREDICT_ERRORS)
+#                                                    and duration; EDF and MPEDF are
+#                                                    predictor-independent, so they run
+#                                                    once and are replicated across the
+#                                                    error levels rather than re-simulated)
+#   - error_sweep @ 250k ticks, n_runs=500: ~9.5 h  -- exceeds the 5 h default below,
 #                                                    submit with --time=12:00:00
+#   - cats_comparison: 7 CATS variants on the sweep's grid, so budget about the
+#                      same as sweep at the same n_runs and duration.
 # Sweep / error_sweep modes keep the worker memory footprint at tens of MB
 # (no full log parsed in Python). Tests mode parses ~180 MB JSON per worker
 # — if running tests with n_runs > 16 on this 32-CPU layout, raise
@@ -29,6 +37,7 @@
 # Override defaults via --export, e.g.:
 #     sbatch --export=N_RUNS=100,MODE=sweep,ALL       run_slurm.sh <run_name> [belief_threshold] [utilization_threshold]
 #     sbatch --export=N_RUNS=200,MODE=error_sweep,ALL run_slurm.sh <run_name>
+#     sbatch --export=N_RUNS=50,MODE=cats_comparison,ALL run_slurm.sh <run_name>
 # Reproducible run (same SEED → bit-identical output PNGs):
 #     sbatch --export=SEED=42,ALL run_slurm.sh <run_name>
 # Override the weakly-hard (m,k) window used by the sched_ratio_mk curve
@@ -46,9 +55,23 @@ module load gcc
 
 # --- Python env -------------------------------------------------------------
 # Create once on a login node:  conda create -n rt-link-sim python=3.12 numpy matplotlib
-# (Renamed from cats-scheduler; on an account with the old environment run
-#  `conda rename -n cats-scheduler rt-link-sim` before the next submission.)
-conda activate rt-link-sim
+# The project was renamed from cats-scheduler, so accounts created before the
+# rename still have an environment under the old name. Either name is accepted
+# here; override both with  sbatch --export=CONDA_ENV=my-env,ALL ...
+CONDA_ENV="${CONDA_ENV:-rt-link-sim}"
+if ! conda activate "${CONDA_ENV}" 2>/dev/null; then
+    if conda activate cats-scheduler 2>/dev/null; then
+        echo "NOTE: conda env '${CONDA_ENV}' not found, using legacy 'cats-scheduler'." >&2
+        echo "      Rename it on a login node:  conda rename -n cats-scheduler rt-link-sim" >&2
+    else
+        echo "ERROR: no conda env named '${CONDA_ENV}' or 'cats-scheduler'." >&2
+        echo "       Create one on a login node:" >&2
+        echo "         conda create -n ${CONDA_ENV} python=3.12 numpy matplotlib" >&2
+        echo "       Environments visible to this job:" >&2
+        conda info --envs >&2 || true
+        exit 1
+    fi
+fi
 
 # --- Workdir ----------------------------------------------------------------
 cd "${SLURM_SUBMIT_DIR}"
@@ -69,10 +92,10 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 N_RUNS="${N_RUNS:-50}"   # runs averaged per (scenario, U, scheduler) point
-MODE="${MODE:-sweep}"    # tests | sweep | error_sweep
+MODE="${MODE:-sweep}"    # tests | sweep | error_sweep | cats_comparison
 case "${MODE}" in
-    tests|sweep|error_sweep) ;;
-    *) echo "ERROR: MODE='${MODE}' is not one of tests|sweep|error_sweep." >&2
+    tests|sweep|error_sweep|cats_comparison) ;;
+    *) echo "ERROR: MODE='${MODE}' is not one of tests|sweep|error_sweep|cats_comparison." >&2
        echo "       A typo here used to run the far heavier 'tests' mode instead," >&2
        echo "       which OOM-kills the step at n_runs>16 on --mem-per-cpu=1G." >&2
        exit 1 ;;

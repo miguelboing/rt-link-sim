@@ -22,7 +22,7 @@ TESTS_DIR = "tests"
 
 # The modes the CLI accepts, checked before anything runs — see the guard in
 # __main__ for why an unknown one must not fall through to `tests`.
-MODES = ("tests", "sweep", "error_sweep")
+MODES = ("tests", "sweep", "error_sweep", "cats_comparison")
 
 # ── Figure style and paper symbols ────────────────────────────────────────────
 #
@@ -211,26 +211,46 @@ def make_config(test: dict, seed: Optional[int] = None) -> dict:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-# CHARM as published: dequeues by shortest period (rate-monotonic order).
+# CHARM: dequeues by shortest period (rate-monotonic order), with
+# belief-driven listening rather than the published fixed `rx_period`
+# interval. Confidence in the last prediction decays at the channel's own
+# mixing rate and a listen restores it, so the scheduler refreshes when the
+# estimate has actually gone stale instead of on a tuned clock — the interval
+# stops being a parameter and `belief_threshold` takes its place.
+#
+# Note this is *not* CHARM as published any more. There is no fixed-interval
+# listener left in the roster, so the figures no longer carry a periodic-vs-
+# belief control; a CHARM/CATS gap is now queue discipline, power policy and
+# early dropping, but no longer the listening rule.
 BASE_SCHEDULER = {
     "type": "CHARM",
     "tx_power": 10,
     "frequency": 14074000,
-    "rx_period": 5,
+    "belief_threshold": 0.7,
 }
 
 BASE_SCHEDULER_25W = dict(BASE_SCHEDULER, tx_power=25)
 
 # CHEDF — CHARM's retransmission/power policy over an EDF queue. A separate
-# scheduler type (C++ subclasses CHARM and overrides only the packet choice),
-# so it takes the same parameters and differs from BASE_SCHEDULER in nothing
-# but `type`. A CHARM/CHEDF pair on the same axes isolates queue discipline.
+# scheduler type, and on the C++ side a standalone class that copies CHARM's
+# rule rather than subclassing it, so it takes the same parameters and differs
+# from BASE_SCHEDULER in nothing but `type`. A CHARM/CHEDF pair on the same
+# axes isolates queue discipline.
 BASE_CHEDF_SCHEDULER     = dict(BASE_SCHEDULER, type="CHEDF")
 BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 
+# The three ablation switches are spelled out rather than left to the C++
+# defaults so `experiment_params.json` records what a run actually used. All
+# three enabled is the published CATS. `tx_power` is read only when
+# adaptive_power is false, and must name a predictor tier (1, 10 or 25 W) —
+# the C++ constructor throws otherwise rather than silently deciding
+# retransmissions from a power it does not transmit at.
 BASE_CATS_SCHEDULER = {
     "type": "CATS",
     "frequency": 14074000,
+    "adaptive_power": True,
+    "early_drop": True,
+    "urgency_check": True,
     "belief_threshold": 0.7,
     "utilization_threshold": 0.9,
 }
@@ -296,7 +316,23 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # retransmission rule. Keyed on the label's base name; a roster entry with no
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
-_POWER_SYMBOLS = {"RM": SYM_PFP, "EDF": SYM_PFP, "CHARM": SYM_PCH, "CHEDF": SYM_PCH}
+_POWER_SYMBOLS = {"RM": SYM_PFP, "EDF": SYM_PFP, "CHARM": SYM_PCH, "CHEDF": SYM_PCH,
+                  "MPRM": SYM_PCH, "MPEDF": SYM_PCH}
+
+# Legend forms for the cats_comparison ablation labels. The raw labels key the
+# results dicts, name the test directories and name the per-scheduler logs, so
+# they stay terse and ASCII; these are the display names. scheduler_title()
+# consults this for the label's *base* (the part before any `_<n>W`), so a
+# fixed-power variant still gets its power appended in the usual parenthesis.
+# Every entry names only what differs from full CATS — adaptive power, early
+# dropping and the urgency check are all on unless the name says otherwise.
+_ABLATION_TITLES = {
+    "CATS_FULL":         "CATS, full",
+    "CATS_FIX_DROP":     "CATS, fixed power",
+    "CATS_FIX_NODROP":   "CATS, fixed power, no early drop",
+    "CATS_ADAPT_NODROP": "CATS, no early drop",
+    "CATS_NOURG":        "CATS, no urgency check",
+}
 
 def scheduler_title(label: str, *extra: str) -> str:
     """Display form of a roster label: `CHEDF_10W` reads as
@@ -313,7 +349,11 @@ def scheduler_title(label: str, *extra: str) -> str:
     base  = m.group(1) if m else label
     parts = [f"{_POWER_SYMBOLS.get(base, SYM_PFP)} = {m.group(2)} W"] if m else []
     parts.extend(extra)
-    return tex_safe(base) + (f" ({', '.join(parts)})" if parts else "")
+    # Ablation labels carry a spelled-out display name; everything else is
+    # shown as written. Already-rendered, so it skips tex_safe().
+    shown = _ABLATION_TITLES.get(base)
+    return (shown if shown is not None else tex_safe(base)) + \
+           (f" ({', '.join(parts)})" if parts else "")
 
 def _math(sym: str, expr: str) -> str:
     """Compose one of the SYM_* constants — which carry their own `$…$` — with
@@ -378,6 +418,34 @@ BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 BASE_RM_SCHEDULER      = {"type": "Rate_M", "tx_power": 10, "frequency": 14074000}
 BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 
+# MPRM / MPEDF — "Mean-Predictor RM" and "Mean-Predictor EDF". The MP prefix is
+# the predictor they run on: a single mean decode probability standing in for
+# the refreshed one CHARM consults. CHARM's accumulated-probability
+# redundancy rule driven by a *static* estimate of the channel instead of a
+# refreshed prediction: the long-run mean decode probability at the
+# scheduler's power, rho_bar_j = sum_s pi_s rho_s(SNR(P_j)), averaged over the
+# FSMC's stationary distribution.
+#
+# The C++ side computes rho_bar from the channel at construction, which is why
+# these take no listening knob at all: a static estimate learns nothing from
+# an RX slot, so MPRM/MPEDF never listen and spend every slot transmitting or
+# idle. That makes them cheaper in airtime than CHARM/CHEDF at the same power
+# — an MPRM/CHARM gap mixes the value of refreshed channel information with
+# that airtime difference, so read it alongside the energy row rather than on
+# its own. How large that difference is is no longer fixed, either: CHARM's
+# listening is belief-driven now, so its RX share varies with the channel
+# instead of being 1 slot in rx_period.
+#
+# They occupy the middle of the roster's ladder of channel knowledge:
+#   RM/EDF       — one send per frame, no channel knowledge
+#   MPRM/MPEDF   — redundancy from the channel's long-run average, never listens
+#   CHARM/CHEDF  — redundancy from a belief-driven refreshed prediction
+#   CATS         — the same listening rule, and picks its power too
+BASE_MPRM_SCHEDULER      = {"type": "MPRM",  "tx_power": 10, "frequency": 14074000}
+BASE_MPRM_SCHEDULER_25W  = dict(BASE_MPRM_SCHEDULER, tx_power=25)
+BASE_MPEDF_SCHEDULER     = {"type": "MPEDF", "tx_power": 10, "frequency": 14074000}
+BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
+
 # Fixed-power baselines are run at both power levels CATS can pick from
 # (CATS predicts over {1, 10, 25} W), so a CATS curve can be read against a
 # baseline that spends the same per-frame energy as its high-power choice.
@@ -389,11 +457,41 @@ BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 # (RM/EDF vs CHARM/CHEDF) crossed with queue discipline (RM/CHARM vs EDF/CHEDF)
 # — so each gap can be read against its own control, with the predictor perfect
 # so none of them can be blamed on prediction noise.
+# The roster of the paper's Simulation 1 (zero predictor error), which is what
+# `sweep` runs. Read across the four properties it varies:
+#
+#   scheduler    listening          power      redundancy                drops early
+#   RM_10W       none               10 W       none, one send per frame  no
+#   EDF_10W      none               10 W       none, one send per frame  no
+#   MPEDF_10W    none               10 W       static channel average    no
+#   CHARM_10W    belief             10 W       refreshed estimate        no
+#   CHARM_25W    belief             25 W       refreshed estimate        no
+#   CHEDF_10W    belief             10 W       refreshed estimate        no
+#   CHEDF_25W    belief             25 W       refreshed estimate        no
+#   CATS         belief + urgency   adaptive   refreshed estimate        yes
+#
+# "belief" is the shared rule: confidence in the last prediction decays at the
+# channel's mixing rate and a listen restores it. CATS additionally refuses to
+# listen while a packet is near its deadline; CHARM/CHEDF listen on belief
+# alone, so a listen there can consume a slot an urgent packet needed.
+#
+# Early dropping is not a knob: it is built into CATS (it discards a packet
+# whose remaining slots cannot cover its reliability target) and no other
+# scheduler does it.
+#
+# Deliberately *not* the full cross. Only the CHARM family is carried at both
+# powers, since 10 W vs 25 W is the comparison that matters for a scheduler
+# that spends its power under a retransmission rule; the fixed-power and
+# static baselines are pinned at 10 W. MPRM (the period-ordered static
+# scheduler) is built and wired but no roster currently uses it — add it back
+# here if the period-ordered arm of that comparison is wanted.
+#
+# Ordered by family, with a family's two power levels adjacent: the panel
+# drawer takes color from enumeration order.
 SCHEDULERS = [
     ("RM_10W",     BASE_RM_SCHEDULER),
-    ("RM_25W",     BASE_RM_SCHEDULER_25W),
     ("EDF_10W",    BASE_EDF_SCHEDULER),
-    ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
+    ("MPEDF_10W",   BASE_MPEDF_SCHEDULER),
     ("CHARM_10W",  BASE_SCHEDULER),
     ("CHARM_25W",  BASE_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
@@ -410,16 +508,63 @@ SCHEDULERS = [
 ERROR_SWEEP_SCHEDULERS = [
     ("EDF_10W",    BASE_EDF_SCHEDULER),
     ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
+    ("MPEDF_10W",   BASE_MPEDF_SCHEDULER),
+    ("MPEDF_25W",   BASE_MPEDF_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
+]
+
+# ── CATS policy comparison (`cats_comparison` mode) ──────────────────────────
+#
+# Ablates CATS's three policies against the full scheduler, all on the same
+# axes as `sweep`. Every entry is the CATS *type* — only the switches differ —
+# so any gap on this figure is attributable to a policy and nothing else.
+#
+#   label                 adaptive power   early drop   urgency check
+#   CATS_FIX_NODROP_10W   no (10 W)        no           yes
+#   CATS_FIX_NODROP_25W   no (25 W)        no           yes
+#   CATS_ADAPT_NODROP     yes              no           yes
+#   CATS_FIX_DROP_10W     no (10 W)        yes          yes
+#   CATS_FIX_DROP_25W     no (25 W)        yes          yes
+#   CATS_FULL             yes              yes          yes
+#   CATS_NOURG            yes              yes          no
+#
+# The two fixed-power variants are carried at both 10 W and 25 W: against
+# 25 W, CATS's top tier, the adaptive gap reads as energy saved at equal
+# capability; against 10 W it reads as reliability bought at equal nominal
+# power, and 10 W is also what the Simulation 1 roster runs at, so those
+# curves are comparable with that figure.
+#
+# Reading the pairs: FIX_NODROP -> ADAPT_NODROP isolates adaptive power,
+# FIX_NODROP -> FIX_DROP isolates early dropping, and CATS_FULL -> CATS_NOURG
+# isolates the listening urgency check. CATS_FULL is the common corner.
+def _cats_variant(**overrides) -> dict:
+    """A CATS config with some switches flipped. Built from BASE_CATS_SCHEDULER
+    so belief/utilization thresholds and frequency stay in one place — and so
+    a CLI threshold override reaches these too, since it rewrites the dicts a
+    roster holds."""
+    return dict(BASE_CATS_SCHEDULER, **overrides)
+
+CATS_COMPARISON_SCHEDULERS = [
+    ("CATS_FIX_NODROP_10W", _cats_variant(adaptive_power=False, tx_power=10, early_drop=False)),
+    ("CATS_FIX_NODROP_25W", _cats_variant(adaptive_power=False, tx_power=25, early_drop=False)),
+    ("CATS_ADAPT_NODROP",   _cats_variant(early_drop=False)),
+    ("CATS_FIX_DROP_10W",   _cats_variant(adaptive_power=False, tx_power=10)),
+    ("CATS_FIX_DROP_25W",   _cats_variant(adaptive_power=False, tx_power=25)),
+    ("CATS_FULL",           _cats_variant()),
+    ("CATS_NOURG",          _cats_variant(urgency_check=False)),
 ]
 
 # Schedulers that never consult the ML predictor. Their results are identical
 # at every predict_error level, so the error sweep runs them once and
 # replicates. Keyed on scheduler *type*, not the label, so adding another
 # fixed-power variant needs no change here.
-PREDICTOR_INDEPENDENT_TYPES = {"Rate_M", "EDF"}
+# MPRM/MPEDF belong here too: their decode estimate is computed from the
+# channel before the run and never refreshed, so predict_error cannot reach
+# them. On the error sweep they contribute one flat curve per power, like
+# the fixed-power baselines.
+PREDICTOR_INDEPENDENT_TYPES = {"Rate_M", "EDF", "MPRM", "MPEDF"}
 
 def is_predictor_independent(scheduler: dict) -> bool:
     return scheduler["type"] in PREDICTOR_INDEPENDENT_TYPES
@@ -483,7 +628,6 @@ class FsmcStatus:
     slope: float
     snr_50_db: float
     max_saturation: float
-    noise_floor_dbm: float
 
 @dataclass
 class Frame:
@@ -566,10 +710,9 @@ def print_test_summary(test: dict):
     print(f"\n── Test: {test['name']} ──")
     sched = cfg['scheduler']
     tx_power_str = f"  tx_power={sched['tx_power']}W" if 'tx_power' in sched else ""
-    rx_period_str = f"  rx_period={sched['rx_period']}" if 'rx_period' in sched else ""
     belief_str = f"  belief_threshold={sched['belief_threshold']}" if 'belief_threshold' in sched else ""
     util_str = f"  util_threshold={sched['utilization_threshold']}" if 'utilization_threshold' in sched else ""
-    print(f"   Scheduler  : {sched['type']}{tx_power_str}  freq={sched['frequency']}Hz{rx_period_str}{belief_str}{util_str}")
+    print(f"   Scheduler  : {sched['type']}{tx_power_str}  freq={sched['frequency']}Hz{belief_str}{util_str}")
     print(f"   Duration   : {cfg['simulation']['duration']} ticks")
     print(f"   Channels   : {', '.join(ch['name'] for ch in cfg['channels'])}")
     print(f"   Packets:")
@@ -1324,14 +1467,19 @@ def average_metrics(runs: list[dict]) -> dict:
 
 # ── Sweep runner ──────────────────────────────────────────────────────────────
 
-def run_sweep(n_runs: int, n_workers: int) -> dict:
+def run_sweep(n_runs: int, n_workers: int, schedulers=None) -> dict:
     """For each (scenario, U, scheduler), run n_runs sims in a single big pool.
-    Returns nested dict results[scen_name][sch_name][U] = avg_schedulability."""
+    Returns nested dict results[scen_name][sch_name][U] = avg_schedulability.
+
+    `schedulers` defaults to SCHEDULERS; `cats_comparison` passes its own
+    roster. Only the parent reads it — each worker is handed a fully resolved
+    config — so this is safe across the spawn pool."""
+    roster = SCHEDULERS if schedulers is None else schedulers
     jobs = []
     for n, c_min, c_max, rr_min, rr_max in SWEEP_SCENARIOS:
         scen_name = scenario_label(n, c_min, c_max, rr_min, rr_max)
         for U in U_VALUES:
-            for sch_name, scheduler in SCHEDULERS:
+            for sch_name, scheduler in roster:
                 test = {
                     "name": f"{scen_name}_U={U:.2f}_{sch_name}",
                     "config": {
@@ -1353,7 +1501,7 @@ def run_sweep(n_runs: int, n_workers: int) -> dict:
     total = len(jobs)
     print(f"  [sweep] dispatching {total} sims "
           f"({len(SWEEP_SCENARIOS)} scen x {len(U_VALUES)} U x "
-          f"{len(SCHEDULERS)} sch x {n_runs} runs)", flush=True)
+          f"{len(roster)} sch x {n_runs} runs)", flush=True)
 
     # Use spawn so child interpreters start clean — without 'spawn', forked
     # workers inherit the parent's matplotlib/numpy state via COW which gets
@@ -1398,7 +1546,7 @@ def run_sweep(n_runs: int, n_workers: int) -> dict:
                 in_flight[fut2] = key
     print()
 
-    results = {scenario_label(*scen): {sch_name: {} for sch_name, _ in SCHEDULERS}
+    results = {scenario_label(*scen): {sch_name: {} for sch_name, _ in roster}
                for scen in SWEEP_SCENARIOS}
     for (scen_name, U, sch_name), runs in combo_runs.items():
         results[scen_name][sch_name][U] = aggregate_runs(runs)
@@ -1423,9 +1571,22 @@ def _legend_ncol(labels, per_row: int) -> int:
     """How many legend columns fit. Width is judged on the *rendered* label:
     `$P_{\\mathrm{CH}}$` is 17 characters of markup that draws as about three
     glyphs, so counting the raw string would push every roster into one
-    column. `per_row` is how many of the *short* labels fit across."""
+    column. `per_row` is how many of the *short* labels fit across.
+
+    The width-limited count is then **balanced**. matplotlib fills a legend
+    column-major and gives the remainder to the trailing columns, so 8 entries
+    across 5 columns come out 2,2,2,1,1 — the last two curves each sit alone
+    at the top of their own column rather than continuing the stack, which
+    reads as though they belong to a different group. Taking the row count the
+    width implies and refilling into `ceil(n / rows)` columns leaves the
+    legend exactly as tall while making every column full to within one entry,
+    so a trailing entry stays underneath the one it follows (CATS under
+    CHEDF 25 W on the 8-scheduler sweep, rather than off in a column of its
+    own)."""
     longest = max(len(re.sub(r"\$[^$]*\$", "xxx", l)) for l in labels)
-    return per_row if longest <= 22 else max(2, per_row - 1)
+    fits    = per_row if longest <= 22 else max(2, per_row - 1)
+    rows    = math.ceil(len(labels) / fits)
+    return math.ceil(len(labels) / rows)
 
 def _grouped_legend_columns(handles, labels, key):
     """Re-order legend entries so that each scheduler gets its own column.
@@ -1512,12 +1673,21 @@ def _draw_scenario_panel(axes, scen_name: str, sch_results: dict):
     — onto pre-existing axes. Shared between the combined plot and the
     per-scenario plots so they stay in sync. `axes` must be indexable with at
     least len(PANEL_METRICS) entries."""
-    colors     = plt.cm.tab10.colors
+    # tab10 holds 10 colors, so a roster longer than that wraps and gives two
+    # curves the same color. tab20 is used only past that point, which keeps
+    # the <=10-curve figures on exactly the colors they have always had; its
+    # entries are dark/light pairs of one hue, so with the roster ordered by
+    # family a scheduler's 10 W and 25 W curves come out as two shades of the
+    # same color.
+    colors     = plt.cm.tab10.colors if len(sch_results) <= 10 else plt.cm.tab20.colors
     # One distinct linestyle per scheduler — the list must be at least as long
     # as the roster or two curves end up sharing a style.
     linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1)),
-                  (0, (1, 1)), (0, (7, 2, 1, 2)), (0, (3, 1, 1, 1, 1, 1))]
-    markers    = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]
+                  (0, (1, 1)), (0, (7, 2, 1, 2)), (0, (3, 1, 1, 1, 1, 1)),
+                  (0, (5, 2, 1, 2)), (0, (2, 2)), (0, (8, 2)),
+                  (0, (1, 2, 4, 2))]
+    markers    = ["o", "s", "^", "D", "v", "P", "X", "*", "h",
+                  "<", ">", "p", "d"]
 
     # Only the mean is drawn. aggregate_runs still records the 10/90 band per
     # metric (`<key>_lo` / `<key>_hi`) in the results dict, but the bands were
@@ -1554,13 +1724,17 @@ def _window_k_suffix() -> str:
         return ""
     return f" ({SYM_KWIN}={BASE_SIM.get('window_k', 100)})"
 
-def plot_schedulability(results: dict):
+def plot_schedulability(results: dict, basename: str = "results_schedulability",
+                        title: str = None):
+    """`basename` and `title` are parameterised so `cats_comparison` writes its
+    own files instead of overwriting the sweep's."""
     scen_names = list(results.keys())
     n_scen     = len(scen_names)
     os.makedirs(TESTS_DIR, exist_ok=True)
 
     n_rows = len(PANEL_METRICS)
-    title  = f"Schedulability and Energy vs Utilization{_window_k_suffix()}"
+    if title is None:
+        title = f"Schedulability and Energy vs Utilization{_window_k_suffix()}"
 
     # Combined figure: one column per scenario, one row per PANEL_METRICS entry.
     fig, axes = plt.subplots(n_rows, n_scen, figsize=(6 * n_scen, 4.2 * n_rows),
@@ -1572,7 +1746,7 @@ def plot_schedulability(results: dict):
     for row, (_key, label, _ylim) in enumerate(PANEL_METRICS):
         axes[row, 0].set_ylabel(label)
     _title_and_legend(fig, axes[0, 0], title, per_row=5)
-    out = save_figure(os.path.join(TESTS_DIR, "results_schedulability"))
+    out = save_figure(os.path.join(TESTS_DIR, basename))
     plt.close()
     print(f"Schedulability plot saved to {out}")
 
@@ -1588,7 +1762,7 @@ def plot_schedulability(results: dict):
         _title_and_legend(fig, axs[0], f"{title} — {scenario_title(scen_name)}",
                           per_row=3)
         out = save_figure(os.path.join(TESTS_DIR,
-                                       f"results_schedulability_{_safe_filename(scen_name)}"))
+                                       f"{basename}_{_safe_filename(scen_name)}"))
         plt.close()
         print(f"Schedulability plot saved to {out}")
 
@@ -1703,10 +1877,10 @@ def _draw_error_sweep_panel(axes, scen_name: str, err_to_sch: dict):
     """Draw one scenario column of the error-sweep figure — one row per
     PANEL_METRICS entry. Color/marker are fixed per scheduler so the curves
     match the other plots; linestyle varies with prediction_error.
-    Predictor-independent schedulers (EDF) are drawn once — CHEDF and CATS get
-    one curve per error level."""
+    Predictor-independent schedulers (EDF, MPEDF) are drawn once — CHEDF and
+    CATS get one curve per error level."""
     colors  = plt.cm.tab10.colors
-    markers = ["o", "s", "^", "D", "v", "P", "X"]
+    markers = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]
     err_linestyles = {err: ls for err, ls in zip(PREDICT_ERRORS, ["-", "--", "-.", ":"])}
 
     # Stable scheduler→(color, marker) mapping derived from roster order.
@@ -1813,13 +1987,14 @@ def write_experiment_params(mode: str, n_runs: int, run_name: Optional[str]) -> 
         # run actually used, or the snapshot won't reproduce the figure.
         "schedulers":  {name: cfg for name, cfg in
                         (ERROR_SWEEP_SCHEDULERS if mode == "error_sweep"
+                         else CATS_COMPARISON_SCHEDULERS if mode == "cats_comparison"
                          else SCHEDULERS)},
         "channels":    BASE_CHANNELS,
     }
 
     # error_sweep drives SWEEP_SCENARIOS too, so it takes this branch — only
     # `tests` mode runs the fixed-U SCENARIOS list.
-    if mode in ("sweep", "error_sweep"):
+    if mode in ("sweep", "error_sweep", "cats_comparison"):
         params["scenarios"] = {
             "SWEEP_SCENARIOS": [
                 {"n": n, "c_min": c_min, "c_max": c_max,
@@ -1893,8 +2068,19 @@ if __name__ == "__main__":
                  f"<run_name> [belief_threshold] [utilization_threshold]")
 
     if belief_threshold is not None:
-        BASE_CATS_SCHEDULER["belief_threshold"] = belief_threshold
-        print(f"CATS belief_threshold overridden to {belief_threshold}")
+        # Applies to *every* belief-driven scheduler, not just CATS: CHARM and
+        # CHEDF listen on the same rule now, and moving CATS's threshold while
+        # leaving theirs at the default would silently compare schedulers
+        # under different listening policies. The names are printed so the
+        # reach of the override is visible in the run header.
+        _rosters = (SCHEDULERS, ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS)
+        touched = sorted({name for roster in _rosters
+                          for name, cfg in roster if "belief_threshold" in cfg})
+        for roster in _rosters:
+            for _name, cfg in roster:
+                if "belief_threshold" in cfg:
+                    cfg["belief_threshold"] = belief_threshold
+        print(f"belief_threshold overridden to {belief_threshold} for: {', '.join(touched)}")
 
     if utilization_threshold is not None:
         BASE_CATS_SCHEDULER["utilization_threshold"] = utilization_threshold
@@ -1927,6 +2113,17 @@ if __name__ == "__main__":
         warn_window_k(SWEEP_SCENARIOS)
         results = run_sweep(n_runs, n_workers)
         plot_schedulability(results)
+        print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
+        sys.exit(0)
+
+    if mode == "cats_comparison":
+        print(f"Running CATS policy comparison ({n_runs} runs/point, "
+              f"{n_workers} workers, {len(CATS_COMPARISON_SCHEDULERS)} variants, "
+              f"window_k={BASE_SIM.get('window_k', 100)})")
+        warn_window_k(SWEEP_SCENARIOS)
+        results = run_sweep(n_runs, n_workers, schedulers=CATS_COMPARISON_SCHEDULERS)
+        plot_schedulability(results, basename="results_cats_comparison",
+                            title=f"CATS policy comparison{_window_k_suffix()}")
         print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 

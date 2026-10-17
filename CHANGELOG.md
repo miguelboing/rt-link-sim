@@ -1,5 +1,59 @@
 # Changelog
 
+## v1.1
+
+### Schedulers
+
+- Added **MPRM** ("Mean-Predictor RM") and **MPEDF** ("Mean-Predictor EDF") — MP for the mean predictor they run on: CHARM's accumulated-probability redundancy rule driven by a *static* estimate of the channel instead of a refreshed prediction. The estimate is the channel's long-run mean decode probability at the scheduler's transmit power, `rho_bar_j = sum_s pi_s rho_s(SNR(P_j))`, fixed before the run starts, so the redundancy allocated to each frame is deterministic. They sit between the fixed-power baselines and the CHARM family, and exist to measure what *refreshed* channel information adds beyond knowing the channel's average quality.
+- MPRM and MPEDF never enter RX_MODE and take no listening knob: a static estimate learns nothing from listening. They therefore spend every slot transmitting or idle, which also makes them cheaper in airtime than CHARM/CHEDF at the same power.
+- `MPEDF_scheduler` is a deliberate copy of `MPRM_scheduler` differing only in the queue comparator, mirroring the existing CHARM/CHEDF arrangement and carrying the same keep-in-sync requirement.
+
+### Listening policy
+
+- **CHARM and CHEDF now listen on belief rather than on a fixed interval.** A periodic `rx_period` listen is an unoptimised stand-in for "is my channel estimate still worth anything", so both adopt the rule CATS already used: confidence decays by `BELIEF_DECAY` on every transmitting slot, a listen restores it, and the scheduler listens once it falls below `belief_threshold`. `rx_period` is removed from the config, the constructors and the roster; `belief_threshold` (default 0.7) replaces it.
+- `BELIEF_DECAY` moved out of CATS into `schedulers/base_scheduler.hpp` so the three belief-driven schedulers share one definition. It is the modulus of the FSMC's second-largest eigenvalue, a property of the channel: recompute it if the transition matrix changes.
+- CHARM/CHEDF listen on belief alone, without CATS's `no_urgent_packet` guard, so a listen can consume a slot a near-deadline packet needed.
+- The CLI's `belief_threshold` argument now applies to every belief-driven scheduler, not only CATS, and prints which ones it touched.
+- **No fixed-interval listener remains in the roster**, so the figures no longer carry a periodic-vs-belief control and nothing is "CHARM as published" any more.
+- Measured against the previous build on identical task sets: RX share fell from a forced 20% to ~13% at U=0.5 and ~3.8% at U=0.8, schedulability was equal or better everywhere sampled, energy rose ~15% as freed slots went to transmitting, and CHARM's worst burst at U=0.8 fell from 684 to 85.
+- **Configs written for v1.0 need updating.** A `rx_period` field is now ignored rather than rejected, and CHARM and CHEDF read `belief_threshold` unconditionally, so a config carrying the old field and not the new one fails at construction.
+
+### CATS policy ablation
+
+- CATS's three policies are now individually switchable: `adaptive_power`, `early_drop` and `urgency_check`, all defaulting to enabled. A config that sets none of them is the published CATS and produces byte-identical output to the previous build.
+- With `adaptive_power` off, the configured `tx_power` drives the transmitted power *and* the demand, infeasibility and urgency maths — no adaptive cap is retained anywhere. A power that is not a predictor tier (1, 10, 25 W) is rejected with a clear config error.
+- With `early_drop` off, infeasible packets stay queued until deadline expiry or normal retirement. Classification is separated from removal, so they are not reclassified as urgent and do not suppress listening.
+- With `urgency_check` off, listening depends on belief alone. Belief update, threshold, power selection and dropping are unchanged, and the empty-buffer listen still applies.
+- New mode **`cats_comparison`** plots seven variants on the sweep's axes, writing `results_cats_comparison*`. Fixed-power variants run at both 10 W and 25 W.
+- `run_sweep()` takes an optional roster and `plot_schedulability()` an optional basename/title, so the new mode reuses both without overwriting the sweep's figures.
+- The CLI `belief_threshold` override now also reaches the comparison roster.
+
+### Channel
+
+- **The 20 m state table now carries three distinct decode curves instead of two.** It was three Good states followed by three Poor ones, so the one-way ring stepped straight from the best channel to the worst. A Moderate rung was added and the six slots mirrored as `Good, Moderate, Poor, Poor, Moderate, Good`, so the walk descends and climbs back and the wrap no longer jumps between extremes. This changes every result against the previous release.
+- **`noise_floor_dbm` removed** from `fsmc_states.json`, `markov_state_t`, the verbose stdout dump and the per-tick log. It was dead data: the noise term in the decode-probability calculation has always been commented out, so received power is used directly as the SNR and the noise floor is folded into each state's `snr_50_db`. Results are unchanged, verified byte-identical against the previous build on a seeded 3000-tick run. A `fsmc_states.json` that still carries the key loads fine, since the loader reads only the three keys it needs; a `simulation_log.json` written before this change can no longer be parsed by `tests` mode, because `FsmcStatus` no longer accepts the field.
+- `BasePhysicalChannel` gained `mean_probability()`, the long-run average decode probability at a power. `SigmoidChannel` averages its per-state curves over the chain's stationary distribution, computed once at construction by power iteration on the transition matrix; `ReplayChannel` returns the empirical decode rate of the recorded window.
+- `SigmoidChannel` state handling tidied: the state count is now the single constant `N_STATES` rather than three independent literals, the per-state decode curve is reachable without stepping the chain, and a `fsmc_states.json` shorter than the chain is rejected at construction instead of being read out of bounds.
+- Behaviour of the existing schedulers is unchanged by the refactor; seeded runs reproduce byte-identically.
+
+### Experiment harness
+
+- `sweep` roster set to the 8 of the paper's Simulation 1: RM, EDF and MPEDF at 10 W, CHARM and CHEDF at 10 W and 25 W, and CATS. `error_sweep` grows from 5 to 7 with the two MPEDF entries. MPRM and MPEDF are predictor-independent, so the error sweep runs them once and replicates.
+- MPRM is built and wired but used by no roster; it is kept for the period-ordered arm of the static comparison.
+- Sweep figures fall back to the `tab20` palette past 10 curves, leaving shorter rosters on the colors they had.
+- Added a second recorded channel window, `hf_experiment/radius_2500km/frame_success.csv`, so the replay experiment can be run at more than one link distance.
+
+### Cluster support
+
+- `run_slurm.sh` takes a `CONDA_ENV` override, falls back to the pre-rename `cats-scheduler` environment, and on finding neither prints the create command and the environments the job can actually see instead of dying on conda's own error.
+- Resource-sizing estimates rescaled from the retired 5-entry roster to the current rosters, `cats_comparison` added to them, and they are now marked as extrapolations rather than measurements. The note on which schedulers are deduplicated across error levels was wrong: it is EDF and MPEDF, not RM.
+
+### Documentation
+
+- Added `doc/`, holding the new `doc/USAGE.md` and the system-model, channel-curve and scheduler-comparison figures, with `.gitignore` exceptions so the `*.png` / `*.pdf` rules no longer hide them.
+- `SLURM.md` moved to `doc/SLURM.md` alongside the rest of the documentation.
+- `CLAUDE.md` is no longer tracked; its operational content lives in `doc/USAGE.md`.
+
 ## v1.0
 
 First complete release of the simulator and its experiment harness. `v0.5` ran a single EDF scheduler over a static channel from a hardcoded `main.cpp`; this release is a config-driven, reproducible, five-scheduler comparison framework. 161 commits.
@@ -10,7 +64,7 @@ First complete release of the simulator and its experiment harness. `v0.5` ran a
 
 ### Schedulers
 
-- Added **CATS**, the project's contribution: belief about the channel state plus a utilization test, choosing both when to transmit and at what power.
+- Added **CATS**: belief about the channel state plus a utilization test, choosing both when to transmit and at what power.
 - Added **CHARM**, a channel-aware baseline with accumulated-probability retransmission over a period-ordered queue.
 - Added **CHEDF**, CHARM's policy over a deadline-ordered queue, isolating queue discipline from power policy.
 - Renamed `smaller_period_first` to **Rate-Monotonic** to match the literature.

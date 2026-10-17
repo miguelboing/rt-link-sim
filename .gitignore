@@ -61,3 +61,13 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Documentation figures are deliberately tracked: the README embeds the PNGs,
+# and the PDFs are kept beside them as the vector originals for the paper.
+# Without these exceptions the *.png / *.pdf rules above would hide them and
+# every image in the README would 404 for anyone who cloned the repo.
+!doc/*.png
+!doc/*.pdf
+
+# Local agent instructions, not part of the published repo.
+CLAUDE.md
