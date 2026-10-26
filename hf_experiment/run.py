@@ -117,8 +117,6 @@ rs.SCHEDULERS = [
 rs.ERROR_SWEEP_SCHEDULERS = [
     ("EDF_10W",    _sched(rs.BASE_EDF_SCHEDULER)),
     ("EDF_25W",    _sched(rs.BASE_EDF_SCHEDULER_25W)),
-    ("MPEDF_10W",   _sched(rs.BASE_MPEDF_SCHEDULER)),
-    ("MPEDF_25W",   _sched(rs.BASE_MPEDF_SCHEDULER_25W)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),
     ("CHEDF_25W",  _sched(rs.BASE_CHEDF_SCHEDULER_25W)),
     ("CATS",       {"type": "CATS", "frequency": FREQ_HZ,
