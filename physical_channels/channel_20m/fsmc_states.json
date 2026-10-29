@@ -1,8 +1,0 @@
-  [
-      { "snr_50_db": 10.0, "slope": 0.4, "max_saturation": 0.95 },
-      { "snr_50_db": 15.0, "slope": 0.3, "max_saturation": 0.85 },
-      { "snr_50_db": 20.0, "slope": 0.2, "max_saturation": 0.70 },
-      { "snr_50_db": 20.0, "slope": 0.2, "max_saturation": 0.70 },
-      { "snr_50_db": 15.0, "slope": 0.3, "max_saturation": 0.85 },
-      { "snr_50_db": 10.0, "slope": 0.4, "max_saturation": 0.95 }
-  ]
