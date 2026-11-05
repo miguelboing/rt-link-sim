@@ -6,7 +6,7 @@ ifndef $(BUILD_DIR)
 endif
 
 .PHONY: all
-all: buffer_packet_rule radio_interface_rule target_receiver_rule ml_predictor_rule
+all: buffer_packet_rule radio_interface_rule target_receiver_rule ml_predictor_rule channel_model_rule
 
 buffer_packet_rule: buffer_packet/Makefile
 	$(MAKE) CFLAGS="$(CFLAGS)" BUILD_DIR=$(BUILD_DIR) -C buffer_packet
@@ -19,6 +19,9 @@ target_receiver_rule: target_receiver/Makefile
 
 ml_predictor_rule: ml_predictor/Makefile
 	$(MAKE) CFLAGS="$(CFLAGS)" BUILD_DIR=$(BUILD_DIR) -C ml_predictor
+
+channel_model_rule: channel_model/Makefile
+	$(MAKE) CFLAGS="$(CFLAGS)" BUILD_DIR=$(BUILD_DIR) -C channel_model
 
 clean:
 	$(RM) *.o
