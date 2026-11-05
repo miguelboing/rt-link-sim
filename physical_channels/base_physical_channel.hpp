@@ -5,6 +5,7 @@
 #include <random>
 
 #include "system_model/system_model.hpp"
+#include "system_model/channel_model/channel_model.hpp"
 
 class BasePhysicalChannel
 {
@@ -34,6 +35,22 @@ public:
 
     /* Per-tick FSMC step. Default no-op for channels without internal state. */
     virtual void advance_fsmc_state(void) {}
+
+    /* The channel's current model-state label, or -1 for a channel with no
+       notion of state. This is what an RX slot observes: the predictor maps it
+       to s_hat_c(t) and the scheduler turns that into decode estimates off its
+       own fitted response curves. */
+    virtual int get_fsmc_state(void) const { return -1; }
+
+    /* The fitted FSMC a scheduler should reason with, or nullptr when the
+       channel has none -- a recorded trace, for instance, which has no state
+       space to label. A scheduler handed nullptr has no model to hold and
+       falls back to being given decode probabilities directly.
+
+       The pointer is the channel's own model and stays valid for its lifetime;
+       a scheduler copies it at construction, since the estimated model is
+       meant to be perturbable independently of the physical one. */
+    virtual const ChannelModel* estimated_model(void) const { return nullptr; }
 
     unsigned int frequency;
 };

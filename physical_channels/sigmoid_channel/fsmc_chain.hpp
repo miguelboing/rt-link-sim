@@ -3,9 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
 #include <random>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -15,13 +13,14 @@
    This is what kovian::MarkovChain does, minus the compile-time N. The
    shipped channels have 6, 8, 2 and 3 states and one build has to load all of
    them, so the dimension cannot be a template parameter: it is read from the
-   channel's own files instead. The file format is unchanged -- the same .kov
-   rows, comma or whitespace separated -- so nothing that writes a channel has
-   to know about this.
+   model instead, so nothing that writes a channel has to know about this.
 
-   The row-count and row-width checks kovian performed are kept here, and one
-   is added: the matrix must be *square*, since with no N to check against, the
-   row count is the only thing that can define it. */
+   It is handed a kernel rather than a path: the files are read once by
+   ChannelModel, which both this chain and the schedulers' estimated models are
+   built from, so the row-width, row-sum and square-matrix validation lives
+   there and is not repeated per consumer. The size check below stays, since it
+   is the last line of defence against stepping into a state the table does not
+   describe. */
 class FsmcChain
 {
 public:
@@ -29,62 +28,10 @@ public:
        per-row distributions normalise them, as kovian's did. */
     using Matrix = std::vector<double>;
 
-    static Matrix matrix_from_file(const std::string& path)
-    {
-        std::ifstream mfile(path);
-        if (!mfile)
-            throw std::runtime_error("FsmcChain: cannot open " + path);
-
-        Matrix flat;
-        std::size_t rows = 0;
-        std::size_t width = 0;
-        std::string line;
-        while (std::getline(mfile, line))
-        {
-            /* Commas are separators, nothing else: swapping them for spaces
-               lets the stream tokenise the row and keeps scientific notation
-               working, which a hand-rolled split would have to handle itself.
-               A far-rank transition can legitimately be written 2.5e-04. */
-            for (char& c : line)
-                if (c == ',') c = ' ';
-
-            std::istringstream row_stream(line);
-            std::size_t in_row = 0;
-            double value = 0.0;
-            while (row_stream >> value)
-            {
-                if (value < 0.0)
-                    throw std::runtime_error("FsmcChain: negative probability in " + path +
-                                             " row " + std::to_string(rows));
-                flat.push_back(value);
-                ++in_row;
-            }
-
-            if (in_row == 0) continue;   /* blank line */
-
-            if (width == 0)
-                width = in_row;
-            else if (in_row != width)
-                throw std::runtime_error("FsmcChain: " + path + " row " + std::to_string(rows) +
-                                         " has " + std::to_string(in_row) + " entries, expected " +
-                                         std::to_string(width));
-            ++rows;
-        }
-
-        if (rows == 0)
-            throw std::runtime_error("FsmcChain: " + path + " is empty");
-        if (rows != width)
-            throw std::runtime_error("FsmcChain: " + path + " is " + std::to_string(rows) +
-                                     "x" + std::to_string(width) + ", expected a square matrix");
-        return flat;
-    }
-
     /* `n` is supplied by the caller rather than recovered from P.size(),
        because the caller is the one that knows how many states the channel
-       claims to have -- SigmoidChannel passes the length of its state table.
-       The check below is therefore the cross-check between the chain file and
-       the state file, which no longer have a shared compile-time constant to
-       be measured against. */
+       claims to have -- SigmoidChannel passes its model's state count, which
+       came from fsmc_states.json. */
     FsmcChain(const Matrix& P, std::size_t n_states):
         n(n_states)
     {
