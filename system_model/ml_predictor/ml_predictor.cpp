@@ -10,6 +10,21 @@ MLPredictor::MLPredictor(std::shared_ptr<unsigned int> sys_tick,
                          double predict_error):
     system_tick(sys_tick), channels(channels), predict_error(predict_error) {};
 
+int MLPredictor::predict_channel_state(unsigned int frequency)
+{
+    auto it = std::find_if(channels->begin(), channels->end(),
+        [frequency](const std::unique_ptr<BasePhysicalChannel>& ch) { return ch->frequency == frequency; });
+
+    if (it == channels->end())
+        return -1;  /* frequency not recognized */
+
+    /* No confusion model yet, so the inferred label is the observed one. When
+       E_c arrives it applies here, between reading the state and returning
+       it -- the one place that knows the model's state space and can draw a
+       wrong label from the right row. */
+    return (*it)->get_fsmc_state();
+}
+
 std::vector<double> MLPredictor::predict_channel_conditions(unsigned int frequency, const std::vector<unsigned int>& powers)
 {
     auto it = std::find_if(channels->begin(), channels->end(),
