@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <random>
 #include <vector>
 
@@ -20,32 +19,6 @@ int MLPredictor::predict_channel_state(std::size_t c)
        it -- the one place that knows the model's state space and can draw a
        wrong label from the right row. */
     return (*this->channels)[c]->get_fsmc_state();
-}
-
-std::vector<double> MLPredictor::predict_channel_conditions(std::size_t c, const std::vector<unsigned int>& powers)
-{
-    if (c < this->channels->size())
-    {
-        BasePhysicalChannel* ch = (*this->channels)[c].get();
-        std::vector<double> probs;
-        probs.reserve(powers.size());
-        const bool noisy = this->predict_error > 0.0;
-        std::uniform_real_distribution<double> noise(-this->predict_error, this->predict_error);
-        for (unsigned int power : powers)
-        {
-            double p = ch->gen_probability(power);
-            if (noisy)
-            {
-                p += noise(this->generator);
-                p = std::max(0.0, std::min(1.0, p));
-            }
-            probs.push_back(p);
-        }
-        return probs;
-    }
-
-    /* -1 represents that the MLPredictor has no such channel */
-    return std::vector<double>(powers.size(), -1.0);
 }
 
 void MLPredictor::seed_rng(uint64_t seed)

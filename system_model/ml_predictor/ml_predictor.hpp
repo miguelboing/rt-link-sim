@@ -31,19 +31,18 @@ public:
        main.cpp warns when a run sets it and takes this path anyway. */
     int predict_channel_state(std::size_t c);
 
-    /* The older interface: decode probabilities straight from the channel, one
-       per requested power. Still used by channels that have no estimated model
-       for a scheduler to hold (ReplayChannel), which have no state to return. */
-    std::vector<double> predict_channel_conditions(std::size_t c, const std::vector<unsigned int>& powers);
-
     void seed_rng(uint64_t seed);
 
     std::shared_ptr<unsigned int> system_tick;
 
     std::shared_ptr<std::vector<std::unique_ptr<BasePhysicalChannel>>> channels;
 
-    /* Half-width of the additive uniform noise applied to each predicted
-       decode probability. 0 reproduces the noiseless oracle. */
+    /* Half-width of the additive uniform noise that *used* to be applied to
+       each predicted decode probability. Dead while the predictor returns a
+       state label: there is no probability here to perturb, and the confusion
+       matrix E_c that would take its place is not implemented. main.cpp warns
+       when a run sets it. Kept so the config field and the error sweep still
+       parse. */
     double predict_error;
 
 private:
