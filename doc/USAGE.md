@@ -73,12 +73,12 @@ as the config path.
     },
     "scheduler": {
         "type": "CATS",
-        "frequency": 14074000,
+        "channel": 0,
         "belief_threshold": 0.7,
         "utilization_threshold": 0.9
     },
     "channels": [
-        { "type": "sigmoid", "name": "channel_20m", "frequency": 14074000 }
+        { "type": "sigmoid", "name": "cyclic_fast_6" }
     ],
     "packet_generators": [
         {
@@ -99,12 +99,21 @@ as the config path.
 ```
 
 - `simulation`: `duration` in frames, plus the optional `seed`,
-  `predict_error` (half-width of the uniform noise injected into each predicted
-  decode probability) and `window_k`.
+  `predict_error` and `window_k`. `predict_error` is the half-width of the
+  uniform noise injected into each predicted decode probability, and applies
+  only to a channel with no fitted FSMC (`replay`): on an FSMC channel the
+  predictor returns a *state label*, which has no probability to perturb.
+  State-prediction error is not implemented yet, and a run that sets
+  `predict_error` on the state path says so on stderr.
 - `scheduler`: `type` plus the parameters listed under
   [Schedulers](#schedulers).
-- `channels`: `sigmoid` takes `name` and `frequency`; `replay` takes
-  `frequency` and `csv_path`.
+- `channels`: `sigmoid` takes `name`, the directory under
+  `physical_channels/` to load; `replay` takes `csv_path` and an optional
+  `name`. **A channel is addressed by its index, not by a frequency**: the
+  channel at position `c` in this list is channel `c` everywhere else -- in a
+  scheduler's `channel` field, in the per-slot log, and in a scheduler's own
+  channel set. The name is descriptive only; nothing looks a channel up by it,
+  and there is no `frequency` field any more.
 - `packet_generators`: only `fixed_rate` is wired in. Packet fields are `id`,
   `period`, `relative_deadline`, `frames` (transmission length in slots),
   `reliability` (required reception probability) and `phase`.
@@ -115,13 +124,19 @@ The harness rewrites this file per run, so edit it only for single runs.
 
 | Type in config | Class | Parameters | Notes |
 |---|---|---|---|
-| `CATS` | `CATS_scheduler` | `frequency`, `belief_threshold`, `utilization_threshold`, the optional switches `adaptive_power`, `early_drop`, `urgency_check` (all default true), plus `tx_power` when `adaptive_power` is false | Channel and belief aware, picks its own power |
-| `CHARM` | `CHARM_scheduler` | `tx_power`, `frequency`, `belief_threshold` | Accumulated-probability redundancy from a listened estimate, period-ordered queue |
-| `CHEDF` | `CHEDF_scheduler` | `tx_power`, `frequency`, `belief_threshold` | The same over a deadline-ordered queue |
-| `MPRM` | `MPRM_scheduler` | `tx_power`, `frequency` | The same redundancy rule from a static channel average, period-ordered queue |
-| `MPEDF` | `MPEDF_scheduler` | `tx_power`, `frequency` | The same over a deadline-ordered queue |
-| `EDF` | `EDF_scheduler` | `tx_power`, `frequency` | Fixed-power baseline |
-| `Rate_M` | `RM_scheduler` | `tx_power`, `frequency` | Fixed-power baseline |
+| `CATS` | `CATS_scheduler` | `channel`, `belief_threshold`, `utilization_threshold`, the optional switches `adaptive_power`, `early_drop`, `urgency_check` (all default true), plus `tx_power` when `adaptive_power` is false | Channel and belief aware, picks its own power |
+| `CHARM` | `CHARM_scheduler` | `tx_power`, `channel`, `belief_threshold` | Accumulated-probability redundancy from a listened estimate, period-ordered queue |
+| `CHEDF` | `CHEDF_scheduler` | `tx_power`, `channel`, `belief_threshold` | The same over a deadline-ordered queue |
+| `MPRM` | `MPRM_scheduler` | `tx_power`, `channel` | The same redundancy rule from a static channel average, period-ordered queue |
+| `MPEDF` | `MPEDF_scheduler` | `tx_power`, `channel` | The same over a deadline-ordered queue |
+| `EDF` | `EDF_scheduler` | `tx_power`, `channel` | Fixed-power baseline |
+| `Rate_M` | `RM_scheduler` | `tx_power`, `channel` | Fixed-power baseline |
+
+`channel` is the index of the channel in the `channels` block, and defaults
+to 0 when omitted -- which is every roster config, since the sweeps declare one
+channel. A scheduler currently transmits on that one channel for the whole run;
+choosing a channel per slot is what the channel set in `BaseScheduler` exists
+for.
 
 The fixed-power schedulers are normally run at both 10 W and 25 W, the two
 upper tiers the predictor reports, so a scheduler that picks its own power and
@@ -144,16 +159,31 @@ isolates the queue discipline.
 > logic has to be applied to both files of a pair, or the comparison stops
 > being interpretable.
 
-### Listening
+### Prediction and listening
 
-CHARM, CHEDF and CATS all refresh their channel estimate on the same rule.
-Confidence in the last prediction decays on every transmitting slot and a
-listen restores it, so the scheduler listens once confidence falls below
-`belief_threshold` rather than on a fixed interval. The decay rate is a
-property of the channel, the modulus of its transition matrix's second-largest
-eigenvalue, so the refresh interval that emerges is the one the channel's own
-dynamics imply. CATS additionally declines to listen while a packet is on the
-edge of its deadline.
+An RX slot buys one thing: the state the channel was observed in. The predictor
+returns that label, and the scheduler derives the decode probability of every
+power level from it off its own copy of the channel's fitted sigmoid curves. So
+one listen refreshes all power levels together, from the same state, and a
+wrong label moves them all at once.
+
+Each of CHARM, CHEDF and CATS therefore carries a copy of the fitted FSMC of
+the channel it operates on, taken from the `channels` block at index
+`channel`. A channel without a fitted model (`replay`)
+hands over decode probabilities directly instead, as before.
+
+All three refresh on the same rule. Confidence in the last prediction decays on
+every transmitting slot and a listen restores it, so the scheduler listens once
+confidence falls below `belief_threshold` rather than on a fixed interval. The
+decay factor is the self-transition probability `A_ss` of the state it believes
+the channel is in, so confidence after `d` slots is `A_ss^d` -- the model
+probability the channel has not left that state, with `1 - A_ss` the per-slot
+probability of leaving. The refresh interval is
+`ceil(ln(belief_threshold) / ln(A_ss))`, which differs per channel *and* per
+state: at the default threshold of 0.7 it is 18 slots everywhere on
+`cyclic_fast_6`, 36 on `cyclic_slow_8`, 18 or 12 on `good_moderate_2`'s two
+states, and 178, 22 or 30 on `rare_excellent_3`'s three. CATS additionally
+declines to listen while a packet is on the edge of its deadline.
 
 MPRM and MPEDF never listen, so they have no listening parameter at all.
 
@@ -233,46 +263,102 @@ its ceiling, and $`\gamma`$ the saturation ceiling.
 Drop in any transition matrix and any set of curves and the simulator runs
 against them. Point `channels[].name` at the new directory. Two caveats:
 
-- The state *count* is the compile-time constant `SigmoidChannel::N_STATES`, so
-  a chain of a different size needs that one line changed and a rebuild. The
-  loaders throw rather than misbehave if the files disagree with it.
+- The state *count* is read from the files at construction — `fsmc_states.json`
+  defines it and the matrix must be square of that size — so channels of
+  different lengths are loaded by the same build with no rebuild. The loaders
+  throw rather than misbehave if the two files disagree.
 - The SNR each transmit power lands on comes from a fixed 20 dB pathloss in
   `SigmoidChannel`, so retargeting a different link budget means editing that
   too.
 
-### The example shipped with the repo
+### The channels shipped with the repo
 
-Everything below describes `physical_channels/channel_20m/`, the example every
-sweep in this repository runs against. It is one configuration, not the model,
-and the figures are illustrative.
+Four channels ship with the simulator, each a named propagation regime rather
+than a tuned parameter set. `build_channels.py` writes all four from their
+design parameters, so the derivations are in one place and a regime can be
+re-pointed (a different occupancy, a different dwell) without hand-editing a
+matrix.
+
+| Channel | States | Curves | Regime |
+|---|---|---|---|
+| `cyclic_fast_6` | 6 | Good, Moderate, Poor | One-way ring, mean dwell 50, lap ~300. The channel every sweep in this repository has run against. |
+| `cyclic_slow_8` | 8 | Excellent, Good, Moderate, Poor | The same ring one rung taller and half the speed: mean dwell 100, lap ~800. |
+| `good_moderate_2` | 2 | Good, Moderate | Oscillates between the two, 60% of the time Good. No deep fades at all. |
+| `rare_excellent_3` | 3 | Excellent, Moderate, Poor | 95% of the time Poor or Moderate; an Excellent opening arrives about every 10k slots and then holds for ~500. |
+
+Averaged over each chain's stationary distribution, the decode probability at
+1 / 10 / 25 W is:
+
+| Channel | 1 W | 10 W | 25 W |
+|---|---|---|---|
+| `cyclic_fast_6` | 0.238 | 0.659 | 0.742 |
+| `cyclic_slow_8` | 0.405 | 0.739 | 0.801 |
+| `good_moderate_2` | 0.347 | 0.838 | 0.886 |
+| `rare_excellent_3` | 0.153 | 0.519 | 0.633 |
+
+These are the numbers MPRM and MPEDF size their redundancy from
+(`mean_probability()`), so they are also the quickest summary of how hard each
+channel is.
+
+Each directory carries a drawing of its own chain (`fsmc_diagram.png`), with
+every state labelled by index and curve and every transition by its
+probability.
+
+#### The curve archetypes
 
 ![Example waterfall curves](markov_states_snr_curves.png)
 
-The figure plots a family of four example parameterisations. `channel_20m`
-instantiates the lower three, each twice, over a 6-state one-way ring
-(`0→1→2→3→4→5→0`) with a 0.98 self-loop, so the mean dwell is 50 ticks and a
-lap about 300. Mirroring them as a triangle (`G, M, P, P, M, G`) makes the walk
-descend from Good to Poor and climb back, rather than jumping from worst
-straight to best at the wrap.
-
 | Curve | $`\alpha`$ (slope) | $`\beta`$ (snr50) | $`\gamma`$ (ceiling) | 1 W | 10 W | 25 W |
 |---|---|---|---|---|---|---|
+| Excellent | 0.5 | 5 | 0.98 | 0.906 | 0.979 | 0.980 |
 | Good | 0.4 | 10 | 0.95 | 0.475 | 0.933 | 0.946 |
 | Moderate | 0.3 | 15 | 0.85 | 0.155 | 0.695 | 0.796 |
 | Poor | 0.2 | 20 | 0.70 | 0.083 | 0.350 | 0.482 |
 
-The 20 dB pathloss puts the three transmit powers at 10, 20 and 24 dB SNR,
-which is where those per-power columns come from. Two properties of this
-example explain much of what the result figures do, and would change with a
-different channel:
+`cyclic_fast_6` uses the lower three rows, `cyclic_slow_8` all four,
+`good_moderate_2` the middle two and `rare_excellent_3` the first, third and
+fourth. The 20 dB pathloss puts the three transmit powers at 10, 20 and 24 dB
+SNR, which is where those per-power columns come from. Two properties of the
+curves explain much of what the result figures do:
 
-- **The power tiers are unevenly spaced.** Averaged over the chain's stationary
-  distribution the decode probability is 0.238 / 0.659 / 0.742 at 1 / 10 / 25 W.
-  Going from 1 W to 10 W multiplies it by 2.8; 10 W to 25 W only by 1.13. 1 W
-  sits below the knee of every curve.
-- **Low power is far more volatile.** Across the three states, 1 W swings 5.7×
-  (0.083 to 0.475) while 10 W swings 2.7×. A scheduler that drops to 1 W is
+- **The power tiers are unevenly spaced.** On `cyclic_fast_6` the stationary
+  decode probability is 0.238 / 0.659 / 0.742 at 1 / 10 / 25 W. Going from 1 W
+  to 10 W multiplies it by 2.8; 10 W to 25 W only by 1.13. 1 W sits below the
+  knee of every curve but Excellent.
+- **Low power is far more volatile.** Across the four curves, 1 W swings 10.9×
+  (0.083 to 0.906) while 10 W swings 2.8×. A scheduler that drops to 1 W is
   therefore much more exposed to the channel moving under it.
+
+#### The two cyclic channels
+
+`cyclic_fast_6` instantiates the lower three curves, each twice, over a 6-state
+one-way ring (`0→1→2→3→4→5→0`) with a 0.98 self-loop, so the mean dwell is 50
+ticks and a lap about 300. Mirroring them as a triangle (`G, M, P, P, M, G`)
+makes the walk descend from Good to Poor and climb back, rather than jumping
+from worst straight to best at the wrap. `cyclic_slow_8` is the same construction over all four curves — eight
+slots are needed to mirror four rungs (`E, G, M, P, P, M, G, E`) — with a 0.99
+self-loop.
+
+Both rings are circulant and therefore doubly stochastic, so their stationary
+distribution is exactly uniform: the time spent on a curve is the number of
+slots carrying it. The mirror is a statement about the *order* conditions
+arrive in, not about how often.
+
+#### The two non-cyclic channels
+
+`good_moderate_2` and `rare_excellent_3` are reversible chains built from a
+target occupancy rather than a cycle. Detailed balance then fixes the return
+rates exactly, which is why their stationary distributions land on 60/40 and
+5/40/55 to numerical precision — `build_channels.py` asserts it. Note that the
+occupancy and the dwells are not independent: asking for 60% Good with a dwell
+of 50 there pins the dwell in Moderate at 33.3, and only two of the three may
+be chosen.
+
+`rare_excellent_3` bars the Excellent↔Poor transition outright, so the channel
+climbs and falls through Moderate. It is the one channel where the long-run
+mean is actively misleading — 5% of the time it is far better than its average
+and 55% of the time worse — which is what makes it the interesting case for a
+scheduler that refreshes its estimate against one that does not.
 
 ### The replay channel
 
@@ -450,7 +536,7 @@ All JSON, PNG, PDF and SVG outputs are gitignored, except the figures under
 {
   "system_tick": 1, "packet_id": 2, "packet_id_count": 0,
   "frame_count": 0, "frames": 1, "deadline": 4,
-  "frequency": 14074000, "transmission_power": 10,
+  "channel": 0, "transmission_power": 10,
   "success_prob": 0.9329131, "reliability_req": 0.77,
   "received": true
 }
@@ -475,15 +561,19 @@ schedulers/
 system_model/
   system_model.hpp               # shared types
   buffer_packet/                 # packet buffer and deadline enforcement
+  channel_model/                 # the fitted FSMC: states, kernel, sigmoids
   radio_interface/               # transmitter side
   target_receiver/               # receiver side
-  ml_predictor/                  # channel-state predictor, read by CATS, CHARM, CHEDF
+  ml_predictor/                  # channel-state predictor: returns a model state
 packet_generators/
   fixed_rate/                    # the only generator currently wired in
 physical_channels/
   sigmoid_channel/               # SNR to success-probability sigmoid
   replay_channel/                # replays recorded per-tick outcomes
-  channel_20m/                   # FSMC state data for the 20 m band
+  cyclic_fast_6/                 # FSMC data: one directory per channel
+  cyclic_slow_8/
+  good_moderate_2/
+  rare_excellent_3/
 hf_experiment/                   # replay sweep built on run_simulation.py
 doc/
   USAGE.md                       # this file

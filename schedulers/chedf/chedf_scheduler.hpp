@@ -26,12 +26,16 @@
 class CHEDF_scheduler : public BaseScheduler
 {
 public:
-    CHEDF_scheduler(unsigned int tx_power, unsigned int frequency, float belief_threshold,
+    CHEDF_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
                     std::optional<ChannelModel> model, BufferPacket* buffer,
                     std::shared_ptr<unsigned int> sys_tick);
 
     unsigned int tx_power;
-    unsigned int frequency;
+
+    /* c: the one channel this scheduler transmits on. Single-channel for now;
+       the choice becomes per-slot once the scheduler reasons over the whole
+       channel set. */
+    std::size_t channel;
 
     /* Confidence that the last prediction still describes the channel: 1
        immediately after a listen, decaying by the believed state's A_ss each

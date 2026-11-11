@@ -11,7 +11,7 @@
 #include "cats.hpp"
 
 
-CATS_scheduler::CATS_scheduler(unsigned int frequency,
+CATS_scheduler::CATS_scheduler(std::size_t channel,
                                float belief_threshold,
                                double utilization_threshold,
                                const std::vector<periodic_task_t>& periodic_tasks,
@@ -23,7 +23,7 @@ CATS_scheduler::CATS_scheduler(unsigned int frequency,
                                BufferPacket* buffer,
                                std::shared_ptr<unsigned int> sys_tick):
     BaseScheduler(buffer, sys_tick),
-    frequency(frequency),
+    channel(channel),
     adaptive_power(adaptive_power),
     fixed_power_idx(N_POWERS - 1U),
     early_drop(early_drop),
@@ -119,7 +119,7 @@ double CATS_scheduler::compute_utilization(double p) const
 scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
-    scheduled_frame.frequency = this->frequency;
+    scheduled_frame.channel = this->channel;
 
     /* Classify every buffered packet, then act on the classification. The two
        are kept separate so the early_drop switch governs *removal* only: with
@@ -275,7 +275,7 @@ void CATS_scheduler::receive_state(int state)
        label moves power selection, demand and urgency together rather than one
        of them.
 
-       -1 means the predictor had no label to give (an unknown frequency); keep
+       -1 means the predictor had no label to give (an unknown channel); keep
        the estimates as they stand, since the slot is spent either way and the
        belief reset is what the listen bought. */
     if (!this->model.has_value() || state < 0) return;

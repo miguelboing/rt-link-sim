@@ -13,7 +13,7 @@ std::optional<transmitted_frame_t> Transmitter::transmit_frame(const scheduled_f
 {
     transmitted_frame_t transmitted_frame;
     transmitted_frame.transmission_power = scheduled_frame.transmission_power;
-    transmitted_frame.frequency = scheduled_frame.frequency;
+    transmitted_frame.channel = scheduled_frame.channel;
 
     if (scheduled_frame.packet == nullptr)
     {

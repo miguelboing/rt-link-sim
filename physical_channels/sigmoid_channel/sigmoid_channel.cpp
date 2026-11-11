@@ -4,8 +4,8 @@
 
 #include "sigmoid_channel.hpp"
 
-SigmoidChannel::SigmoidChannel(unsigned int frequency, const std::string& channel_name):
-    BasePhysicalChannel(frequency),
+SigmoidChannel::SigmoidChannel(const std::string& channel_name):
+    BasePhysicalChannel(channel_name),
     model(ChannelModel::from_directory(channel_name)),
     mc(model.transition_matrix(), model.n_states())
 {
@@ -37,7 +37,7 @@ received_frame_t SigmoidChannel::gen_frame_with_probability(transmitted_frame_t 
     received_frame_t recv_frame;
     recv_frame.packet = transmitted_frame.packet;
     recv_frame.transmission_power = transmitted_frame.transmission_power;
-    recv_frame.frequency = transmitted_frame.frequency;
+    recv_frame.channel = transmitted_frame.channel;
 
     recv_frame.success_prob = this->gen_probability(recv_frame.transmission_power);
 

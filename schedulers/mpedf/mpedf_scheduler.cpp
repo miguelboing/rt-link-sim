@@ -4,13 +4,13 @@
 
 #include "mpedf_scheduler.hpp"
 
-MPEDF_scheduler::MPEDF_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency), mean_prob(mean_prob) {};
+MPEDF_scheduler::MPEDF_scheduler(unsigned int tx_power, std::size_t channel, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), channel(channel), mean_prob(mean_prob) {};
 
 scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
     scheduled_frame.transmission_power = this->tx_power;
-    scheduled_frame.frequency = this->frequency;
+    scheduled_frame.channel = this->channel;
 
     /* No listening branch at all: this scheduler never listens, so every slot is a
        transmit opportunity. See the class comment. */

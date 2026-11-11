@@ -32,7 +32,7 @@ bool TargetReceiver::recv_frame(received_frame_t recv_frame)
             {"frame_count", recv_frame.packet.frame_count},
             {"reliability_req", recv_frame.packet.reliability_req},
             {"transmission_power", recv_frame.transmission_power},
-            {"frequency", recv_frame.frequency},
+            {"channel", recv_frame.channel},
             {"success_prob", recv_frame.success_prob},
             {"received", prob_result}
         };

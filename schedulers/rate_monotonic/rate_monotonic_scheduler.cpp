@@ -4,13 +4,13 @@
 
 #include "rate_monotonic_scheduler.hpp"
 
-RM_scheduler::RM_scheduler(unsigned int tx_power, unsigned int frequency, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency) {};
+RM_scheduler::RM_scheduler(unsigned int tx_power, std::size_t channel, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), channel(channel) {};
 
 scheduled_frame_t RM_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
     scheduled_frame.transmission_power = this->tx_power;
-    scheduled_frame.frequency = this->frequency;
+    scheduled_frame.channel = this->channel;
 
     /* Find the packet with the smaller period */
     auto lowest_it = std::min_element(this->buffer_packet->begin(),

@@ -225,7 +225,6 @@ def make_config(test: dict, seed: Optional[int] = None) -> dict:
 BASE_SCHEDULER = {
     "type": "CHARM",
     "tx_power": 10,
-    "frequency": 14074000,
     "belief_threshold": 0.7,
 }
 
@@ -247,7 +246,6 @@ BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 # retransmissions from a power it does not transmit at.
 BASE_CATS_SCHEDULER = {
     "type": "CATS",
-    "frequency": 14074000,
     "adaptive_power": True,
     "early_drop": True,
     "urgency_check": True,
@@ -255,11 +253,14 @@ BASE_CATS_SCHEDULER = {
     "utilization_threshold": 0.9,
 }
 
+# A channel is named by its directory under physical_channels/, and addressed
+# everywhere else by its *index* — its position in this list, which is the
+# paper's c. A scheduler config may carry `"channel": c` to pick one; omitted,
+# it is 0, which is the only choice while this list holds one entry.
 BASE_CHANNELS = [
     {
         "type": "sigmoid",
-        "name": "channel_20m",
-        "frequency": 14074000
+        "name": "cyclic_fast_6"
     }
 ]
 
@@ -413,9 +414,9 @@ SCENARIOS = [
     (0.50, 8,  1, 3, 0.50, 0.90),
 ]
 
-BASE_EDF_SCHEDULER     = {"type": "EDF", "tx_power": 10, "frequency": 14074000}
+BASE_EDF_SCHEDULER     = {"type": "EDF", "tx_power": 10}
 BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
-BASE_RM_SCHEDULER      = {"type": "Rate_M", "tx_power": 10, "frequency": 14074000}
+BASE_RM_SCHEDULER      = {"type": "Rate_M", "tx_power": 10}
 BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 
 # MPRM / MPEDF — "Mean-Predictor RM" and "Mean-Predictor EDF". The MP prefix is
@@ -441,9 +442,9 @@ BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
 #   MPRM/MPEDF   — redundancy from the channel's long-run average, never listens
 #   CHARM/CHEDF  — redundancy from a belief-driven refreshed prediction
 #   CATS         — the same listening rule, and picks its power too
-BASE_MPRM_SCHEDULER      = {"type": "MPRM",  "tx_power": 10, "frequency": 14074000}
+BASE_MPRM_SCHEDULER      = {"type": "MPRM",  "tx_power": 10}
 BASE_MPRM_SCHEDULER_25W  = dict(BASE_MPRM_SCHEDULER, tx_power=25)
-BASE_MPEDF_SCHEDULER     = {"type": "MPEDF", "tx_power": 10, "frequency": 14074000}
+BASE_MPEDF_SCHEDULER     = {"type": "MPEDF", "tx_power": 10}
 BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
 
 # Fixed-power baselines are run at both power levels CATS can pick from
@@ -499,8 +500,8 @@ SCHEDULERS = [
     ("CATS",       BASE_CATS_SCHEDULER),
 ]
 
-# `error_sweep` draws one curve per scheduler *per error level*, so the 9-entry
-# roster would put ~21 curves on each axis. It is trimmed to the predictor-
+# `error_sweep` draws one curve per scheduler *per error level*, so the 8-entry
+# roster would put ~18 curves on each axis. It is trimmed to the predictor-
 # sensitive schedulers plus a fixed-power reference: CHEDF rather than CHARM
 # (same queue discipline as CATS, so the surviving gap is the power policy),
 # and EDF rather than RM for the same reason. EDF ignores the predictor, so it
@@ -508,8 +509,6 @@ SCHEDULERS = [
 ERROR_SWEEP_SCHEDULERS = [
     ("EDF_10W",    BASE_EDF_SCHEDULER),
     ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
-    ("MPEDF_10W",   BASE_MPEDF_SCHEDULER),
-    ("MPEDF_25W",   BASE_MPEDF_SCHEDULER_25W),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
@@ -541,7 +540,7 @@ ERROR_SWEEP_SCHEDULERS = [
 # isolates the listening urgency check. CATS_FULL is the common corner.
 def _cats_variant(**overrides) -> dict:
     """A CATS config with some switches flipped. Built from BASE_CATS_SCHEDULER
-    so belief/utilization thresholds and frequency stay in one place — and so
+    so the belief and utilization thresholds stay in one place — and so
     a CLI threshold override reaches these too, since it rewrites the dicts a
     roster holds."""
     return dict(BASE_CATS_SCHEDULER, **overrides)
@@ -610,20 +609,27 @@ class Packet:
 class Transmission:
     packet: Packet
     tx_power: int
-    frequency: int
+    channel: int
     probability: float
     reliability_req: float
     received: bool
 
+# Two shapes, one per prediction path. A scheduler holding a model is answered
+# with a state label and derives its own decode probabilities (`state` set); one
+# on the older probability path is answered with `powers`/`probs`. Every field
+# but the channel is therefore optional — reading one unconditionally is how
+# this used to KeyError on an FSMC channel.
 @dataclass
 class Prediction:
-    powers: list[int]
-    probs: list[float]
-    frequency: int
+    channel: int
+    state: Optional[int] = None
+    powers: Optional[list[int]] = None
+    probs: Optional[list[float]] = None
 
 @dataclass
 class FsmcStatus:
-    frequency: int
+    channel: int
+    name: str
     state: int
     slope: float
     snr_50_db: float
@@ -659,7 +665,7 @@ def parse_frame(d: dict) -> Frame:
         transmission = Transmission(
             packet           = parse_packet(t["packet"]),
             tx_power         = t["tx_power"],
-            frequency        = t["frequency"],
+            channel          = t["channel"],
             probability      = t["probability"],
             reliability_req = t["reliability_req"],
             received         = t["received"]
@@ -669,9 +675,10 @@ def parse_frame(d: dict) -> Frame:
     if "prediction" in d:
         p = d["prediction"]
         prediction = Prediction(
-            powers    = p["powers"],
-            probs     = p["probs"],
-            frequency = p["frequency"]
+            channel = p["channel"],
+            state   = p.get("state"),
+            powers  = p.get("powers"),
+            probs   = p.get("probs")
         )
 
     return Frame(
@@ -712,7 +719,7 @@ def print_test_summary(test: dict):
     tx_power_str = f"  tx_power={sched['tx_power']}W" if 'tx_power' in sched else ""
     belief_str = f"  belief_threshold={sched['belief_threshold']}" if 'belief_threshold' in sched else ""
     util_str = f"  util_threshold={sched['utilization_threshold']}" if 'utilization_threshold' in sched else ""
-    print(f"   Scheduler  : {sched['type']}{tx_power_str}  freq={sched['frequency']}Hz{belief_str}{util_str}")
+    print(f"   Scheduler  : {sched['type']}{tx_power_str}  channel={sched.get('channel', 0)}{belief_str}{util_str}")
     print(f"   Duration   : {cfg['simulation']['duration']} ticks")
     print(f"   Channels   : {', '.join(ch['name'] for ch in cfg['channels'])}")
     print(f"   Packets:")
@@ -740,7 +747,8 @@ def extract_metrics(frames: list[Frame], config: dict) -> dict:
     fsmc_state  = [f.fsmc[0].state if f.fsmc else None for f in frames]
     tx_prob     = [f.transmission.probability if f.transmission else None for f in frames]
     tx_power    = [f.transmission.tx_power if f.transmission else 0 for f in frames]
-    pred_prob   = [f.prediction.probs[0] if f.prediction else None for f in frames]
+    pred_prob   = [f.prediction.probs[0] if f.prediction and f.prediction.probs else None
+                   for f in frames]
     missed_ticks  = [f.tick for f in frames if f.missed_packets]
     dropped_ticks = [f.tick for f in frames if f.dropped_packets]
 

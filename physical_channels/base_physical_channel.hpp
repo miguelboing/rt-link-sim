@@ -1,8 +1,10 @@
 #pragma once
 
-#include <vector>
 #include <memory>
 #include <random>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "system_model/system_model.hpp"
 #include "system_model/channel_model/channel_model.hpp"
@@ -10,8 +12,8 @@
 class BasePhysicalChannel
 {
 public:
-    explicit BasePhysicalChannel(unsigned int frequency):
-        frequency(frequency) {};
+    explicit BasePhysicalChannel(std::string name):
+        name(std::move(name)) {};
 
     virtual ~BasePhysicalChannel() = default;
 
@@ -52,6 +54,12 @@ public:
        meant to be perturbable independently of the physical one. */
     virtual const ChannelModel* estimated_model(void) const { return nullptr; }
 
-    unsigned int frequency;
+    /* The channel's own name, which for a sigmoid channel is exactly the
+       directory under physical_channels/ it was built from -- "cyclic_fast_6".
+       It is for logs, config and error messages; it is *not* how anything
+       addresses the channel. That is the index c, which is the channel's
+       position in the simulator's channel vector, so there is no second
+       identifier to keep in step with it. */
+    std::string name;
 };
 

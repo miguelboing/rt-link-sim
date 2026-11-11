@@ -44,10 +44,14 @@
 class MPRM_scheduler : public BaseScheduler
 {
 public:
-    MPRM_scheduler(unsigned int tx_power, unsigned int frequency, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
+    MPRM_scheduler(unsigned int tx_power, std::size_t channel, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
 
     unsigned int tx_power;
-    unsigned int frequency;
+
+    /* c: the one channel this scheduler transmits on. Single-channel for now;
+       the choice becomes per-slot once the scheduler reasons over the whole
+       channel set. */
+    std::size_t channel;
 
     /* Static long-run decode probability at tx_power. Fixed for the whole
        run; this is the one input that distinguishes MPRM from CHARM. */

@@ -10,35 +10,30 @@ MLPredictor::MLPredictor(std::shared_ptr<unsigned int> sys_tick,
                          double predict_error):
     system_tick(sys_tick), channels(channels), predict_error(predict_error) {};
 
-int MLPredictor::predict_channel_state(unsigned int frequency)
+int MLPredictor::predict_channel_state(std::size_t c)
 {
-    auto it = std::find_if(channels->begin(), channels->end(),
-        [frequency](const std::unique_ptr<BasePhysicalChannel>& ch) { return ch->frequency == frequency; });
-
-    if (it == channels->end())
-        return -1;  /* frequency not recognized */
+    if (c >= this->channels->size())
+        return -1;  /* no such channel */
 
     /* No confusion model yet, so the inferred label is the observed one. When
        E_c arrives it applies here, between reading the state and returning
        it -- the one place that knows the model's state space and can draw a
        wrong label from the right row. */
-    return (*it)->get_fsmc_state();
+    return (*this->channels)[c]->get_fsmc_state();
 }
 
-std::vector<double> MLPredictor::predict_channel_conditions(unsigned int frequency, const std::vector<unsigned int>& powers)
+std::vector<double> MLPredictor::predict_channel_conditions(std::size_t c, const std::vector<unsigned int>& powers)
 {
-    auto it = std::find_if(channels->begin(), channels->end(),
-        [frequency](const std::unique_ptr<BasePhysicalChannel>& ch) { return ch->frequency == frequency; });
-
-    if (it != channels->end())
+    if (c < this->channels->size())
     {
+        BasePhysicalChannel* ch = (*this->channels)[c].get();
         std::vector<double> probs;
         probs.reserve(powers.size());
         const bool noisy = this->predict_error > 0.0;
         std::uniform_real_distribution<double> noise(-this->predict_error, this->predict_error);
         for (unsigned int power : powers)
         {
-            double p = (*it)->gen_probability(power);
+            double p = ch->gen_probability(power);
             if (noisy)
             {
                 p += noise(this->generator);
@@ -49,7 +44,7 @@ std::vector<double> MLPredictor::predict_channel_conditions(unsigned int frequen
         return probs;
     }
 
-    /* -1 represents that the MLPredictor didn't recognize the frequency */
+    /* -1 represents that the MLPredictor has no such channel */
     return std::vector<double>(powers.size(), -1.0);
 }
 

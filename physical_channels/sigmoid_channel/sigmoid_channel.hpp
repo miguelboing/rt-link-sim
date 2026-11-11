@@ -27,7 +27,7 @@ public:
        drifting apart. */
     std::size_t n_states(void) const { return this->model.n_states(); }
 
-    explicit SigmoidChannel(unsigned int frequency, const std::string& channel_name);
+    explicit SigmoidChannel(const std::string& channel_name);
 
     double gen_probability(unsigned int transmission_power) override;
     double mean_probability(unsigned int transmission_power) override;

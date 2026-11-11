@@ -167,12 +167,6 @@ CHANNELS = [
     },
 ]
 
-# Frequencies are a *config* field, not a property of the channel, so nothing
-# is written into the directories. These are the ones the printed snippet
-# suggests: the first keeps the frequency the harness already uses, so
-# renaming the shipped channel changes nothing else.
-BASE_FREQ, FREQ_STEP = 14074000, 10000
-
 # The stationary distribution is solved numerically and compared against the
 # design target; anything above this is a bug in the construction, not a
 # tolerance to be widened.
@@ -188,7 +182,7 @@ def states_for(curve_names):
     return out
 
 
-def write_channel(spec, freq, out_dir, draw):
+def write_channel(spec, out_dir, draw):
     matrix = spec["build"]()
     curves = spec["curves"]
     states = states_for(curves)
@@ -234,7 +228,7 @@ def write_channel(spec, freq, out_dir, draw):
 
     if draw:
         try:
-            outs = draw_fsmc(spec["name"], freq, matrix, curves, states, pi,
+            outs = draw_fsmc(spec["name"], matrix, curves, states, pi,
                              os.path.join(out_dir, FIGURE_BASENAME))
             print(f"   diagram: {outs}")
         except ImportError as exc:
@@ -261,13 +255,12 @@ def main():
                  f"Known: {', '.join(sorted(known))}")
 
     cfg = []
-    for i, spec in enumerate(CHANNELS):
-        freq = BASE_FREQ + i * FREQ_STEP
+    for spec in CHANNELS:
         if spec["name"] not in wanted:
             continue
         out_dir = None if args.dry_run else os.path.join(CHANNEL_DIR, spec["name"])
-        write_channel(spec, freq, out_dir, draw=not args.no_figure)
-        cfg.append({"type": "sigmoid", "frequency": freq, "name": spec["name"]})
+        write_channel(spec, out_dir, draw=not args.no_figure)
+        cfg.append({"type": "sigmoid", "name": spec["name"]})
 
     print("\n" + "=" * 70)
     if args.dry_run:
@@ -277,8 +270,8 @@ def main():
         print("note: *.json, *.png and *.pdf are gitignored, so fsmc_states.json and\n"
               "      the diagrams need `git add -f` to be committed.")
 
-    print("\nconfig snippet -- a scheduler binds to a channel by `frequency`, so\n"
-          "running on a different channel means moving both:\n")
+    print("\nconfig snippet -- a channel is addressed by its *index* in this\n"
+          "list, which is what a scheduler's `channel` field names (0 if omitted):\n")
     print(json.dumps({"channels": cfg}, indent=2))
 
 

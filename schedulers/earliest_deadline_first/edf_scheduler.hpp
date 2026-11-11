@@ -7,9 +7,13 @@
 class EDF_scheduler : public BaseScheduler
 {
 public:
-    EDF_scheduler(unsigned int tx_power, unsigned int frequency, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
+    EDF_scheduler(unsigned int tx_power, std::size_t channel, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
     unsigned int tx_power;
-    unsigned int frequency;
+
+    /* c: the one channel this scheduler transmits on. Single-channel for now;
+       the choice becomes per-slot once the scheduler reasons over the whole
+       channel set. */
+    std::size_t channel;
     scheduled_frame_t do_schedule_frame(void) override;
 
     void receive_prediction(const std::vector<double>& pred_probs) override {}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <random>
@@ -16,8 +17,8 @@ public:
                          double predict_error = 0.0);
 
     /* g_c(y_c(t)): the model-state label inferred from what an RX slot
-       observed on the channel, or -1 when no channel sits at that frequency or
-       the one that does has no state space to label. This is the predictor's
+       observed on channel c, or -1 when c is out of range or the channel it
+       names has no state space to label. This is the predictor's
        whole output -- one label, not a decode probability per power. The
        scheduler turns it into the row rho_hat_{c,s,.} off its own copy of the
        fitted response curves, so a single observation refreshes every power
@@ -28,12 +29,12 @@ public:
        the identity-confusion case. `predict_error` does not reach this path:
        it perturbs a probability, and there is no probability here to perturb.
        main.cpp warns when a run sets it and takes this path anyway. */
-    int predict_channel_state(unsigned int frequency);
+    int predict_channel_state(std::size_t c);
 
     /* The older interface: decode probabilities straight from the channel, one
        per requested power. Still used by channels that have no estimated model
        for a scheduler to hold (ReplayChannel), which have no state to return. */
-    std::vector<double> predict_channel_conditions(unsigned int frequency, const std::vector<unsigned int>& powers);
+    std::vector<double> predict_channel_conditions(std::size_t c, const std::vector<unsigned int>& powers);
 
     void seed_rng(uint64_t seed);
 

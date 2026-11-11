@@ -37,7 +37,7 @@ public:
     static constexpr unsigned int N_POWERS = 3U;
     static constexpr unsigned int POWER_LEVELS[N_POWERS] = {1U, 10U, 25U};
 
-    CATS_scheduler(unsigned int frequency,
+    CATS_scheduler(std::size_t channel,
                    float belief_threshold,
                    double utilization_threshold,
                    const std::vector<periodic_task_t>& periodic_tasks,
@@ -49,7 +49,10 @@ public:
                    BufferPacket* buffer,
                    std::shared_ptr<unsigned int> sys_tick);
 
-    unsigned int frequency;
+    /* c: the one channel this scheduler transmits on. Single-channel for now;
+       the choice becomes per-slot once the scheduler reasons over the whole
+       channel set. */
+    std::size_t channel;
 
     /* --- Ablation switches ------------------------------------------------ */
 

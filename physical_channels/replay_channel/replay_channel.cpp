@@ -24,10 +24,10 @@ namespace
     constexpr double PROB_25W = 0.96;
 }
 
-ReplayChannel::ReplayChannel(unsigned int frequency,
+ReplayChannel::ReplayChannel(const std::string& name,
                              const std::string& csv_path,
                              std::shared_ptr<unsigned int> sys_tick):
-    BasePhysicalChannel(frequency), system_tick(sys_tick)
+    BasePhysicalChannel(name), system_tick(sys_tick)
 {
     std::ifstream f(csv_path);
     if (!f.is_open())
@@ -119,7 +119,7 @@ received_frame_t ReplayChannel::gen_frame_with_probability(transmitted_frame_t t
     received_frame_t recv;
     recv.packet             = transmitted_frame.packet;
     recv.transmission_power = transmitted_frame.transmission_power;
-    recv.frequency          = transmitted_frame.frequency;
+    recv.channel            = transmitted_frame.channel;
 
     const int col = power_column(transmitted_frame.transmission_power);
     if (col < 0)

@@ -32,7 +32,6 @@ sys.path.insert(0, REPO_ROOT)
 # be set before this line for reproducibility.
 import run_simulation as rs  # noqa: E402
 
-FREQ_HZ = 14_074_000
 
 # ── Sweep configuration ──────────────────────────────────────────────────
 # Monkey-patch the run_simulation module globals that `run_sweep` and
@@ -74,7 +73,7 @@ rs.VACUOUS_WARN_THRESHOLD = 2.0
 
 rs.BASE_CHANNELS = [{
     "type":      "replay",
-    "frequency": FREQ_HZ,
+    "name":      "hf_replay",
     # Resolved relative to SCRIPT_DIR (repo root) because the binary runs
     # with cwd=SCRIPT_DIR.
     "csv_path":  "hf_experiment/frame_success.csv",
@@ -85,8 +84,9 @@ rs.BASE_CHANNELS = [{
 # comparable per-frame energy. The ReplayChannel resolves all three powers from
 # the CSV, so 25 W replays real recorded outcomes rather than an extrapolation.
 #
-# Both rosters mirror run_simulation's, with only the channel and frequency
-# rebound, so curve names and figure layout match across the two experiments.
+# Both rosters mirror run_simulation's, with only the channel rebound (to the
+# replay channel, which is index 0 here as it is there), so curve names and
+# figure layout match across the two experiments.
 # `sweep` carries the 8 of the paper's Simulation 1 (RM / EDF / MPEDF at 10 W,
 # CHARM / CHEDF at both powers, CATS); `error_sweep` carries 7, since each
 # predictor-sensitive scheduler draws one curve per error level.
@@ -100,7 +100,11 @@ rs.BASE_CHANNELS = [{
 # informative comparison for these two is the FSMC sweep in run_simulation,
 # where the live prediction actually moves.
 def _sched(cfg: dict) -> dict:
-    return dict(cfg, frequency=FREQ_HZ)
+    """A copy of a run_simulation roster config. Channels are addressed by index
+    now and the replay channel is index 0 here just as the sigmoid channel is
+    there, so there is nothing left to rebind — the copy is kept so a roster
+    entry can never alias the shared BASE_* dict."""
+    return dict(cfg)
 
 rs.SCHEDULERS = [
     ("RM_10W",     _sched(rs.BASE_RM_SCHEDULER)),
@@ -110,7 +114,7 @@ rs.SCHEDULERS = [
     ("CHARM_25W",  _sched(rs.BASE_SCHEDULER_25W)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),
     ("CHEDF_25W",  _sched(rs.BASE_CHEDF_SCHEDULER_25W)),
-    ("CATS",       {"type": "CATS", "frequency": FREQ_HZ,
+    ("CATS",       {"type": "CATS",
                     "belief_threshold": 0.7, "utilization_threshold": 0.95}),
 ]
 
@@ -119,7 +123,7 @@ rs.ERROR_SWEEP_SCHEDULERS = [
     ("EDF_25W",    _sched(rs.BASE_EDF_SCHEDULER_25W)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),
     ("CHEDF_25W",  _sched(rs.BASE_CHEDF_SCHEDULER_25W)),
-    ("CATS",       {"type": "CATS", "frequency": FREQ_HZ,
+    ("CATS",       {"type": "CATS",
                     "belief_threshold": 0.7, "utilization_threshold": 0.95}),
 ]
 

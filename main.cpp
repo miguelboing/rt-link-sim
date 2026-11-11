@@ -101,19 +101,25 @@ int main(int argc, char* argv[])
     auto channels = std::make_shared<std::vector<std::unique_ptr<BasePhysicalChannel>>>();
     try
     {
+        /* Declaration order is the channel index c: the channel at position
+           c in this vector is channel c everywhere else -- in a scheduled
+           frame, in a predictor query, and in a scheduler's channel set. A
+           channel carries its name for logs and errors, nothing addresses it
+           by that. */
         size_t ch_idx = 0;
         for (const auto& ch : config["channels"])
         {
             if (ch["type"] == "sigmoid")
             {
-                auto sc = std::make_unique<SigmoidChannel>(ch["frequency"], ch["name"]);
+                auto sc = std::make_unique<SigmoidChannel>(ch["name"]);
                 if (has_seed) sc->seed_rng(seed + 0x100 + ch_idx);
                 channels->emplace_back(std::move(sc));
             }
             else if (ch["type"] == "replay")
             {
                 auto rc = std::make_unique<ReplayChannel>(
-                    ch["frequency"], ch["csv_path"].get<std::string>(), system_tick);
+                    ch.value("name", std::string("replay")),
+                    ch["csv_path"].get<std::string>(), system_tick);
                 channels->emplace_back(std::move(rc));
             }
             else
@@ -131,38 +137,43 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    if (channels->empty())
+    {
+        std::cerr << "ERROR: config declares no channels" << std::endl;
+        return -1;
+    }
+
     /* Initialize scheduler from config */
     const auto& sched_cfg = config["scheduler"];
     const std::string sched_type = sched_cfg["type"];
 
-    auto channel_at = [&channels](unsigned int freq) -> BasePhysicalChannel* {
-        auto it = std::find_if(channels->begin(), channels->end(),
-            [freq](const std::unique_ptr<BasePhysicalChannel>& ch) {
-                return ch->frequency == freq;
-            });
-        return it == channels->end() ? nullptr : it->get();
-    };
+    /* c: the channel this scheduler operates on, as an index into the
+       `channels` block. Defaults to 0, the single channel most configs
+       declare. Single-channel for now -- the index becomes a per-slot
+       decision once the scheduler reasons over the whole channel set. */
+    const std::size_t sched_channel = sched_cfg.value("channel", std::size_t{0});
 
-    /* The estimated channel model the scheduler reasons with. A scheduler is
-       given a *copy* of the fitted FSMC of the channel it operates on, found
-       by frequency the same way MPRM/MPEDF find theirs -- nothing new in the
-       config. Holding its own copy is what lets the estimated model be
-       perturbed away from the physical one later without the channel noticing;
-       as shipped the two are identical, which is the zero-mismatch reference
-       case.
+    if (sched_channel >= channels->size())
+    {
+        std::cerr << "ERROR: " << sched_type << " asks for channel " << sched_channel
+                  << " but the config declares " << channels->size()
+                  << " channel(s) (valid indices 0.." << channels->size() - 1 << ")"
+                  << std::endl;
+        return -1;
+    }
+
+    /* The estimated channel model the scheduler reasons with: a *copy* of the
+       fitted FSMC of the channel it operates on. Holding its own copy is what
+       lets the estimated model be perturbed away from the physical one later
+       without the channel noticing; as shipped the two are identical, which
+       is the zero-mismatch reference case.
 
        Empty when the channel has no model to copy (ReplayChannel, a recorded
        trace with no state space). Such a scheduler keeps taking decode
        probabilities from the predictor instead of state labels. */
     std::optional<ChannelModel> sched_model;
-    if (sched_cfg.contains("frequency"))
-    {
-        if (BasePhysicalChannel* ch = channel_at(sched_cfg["frequency"]))
-        {
-            if (const ChannelModel* m = ch->estimated_model())
-                sched_model = *m;
-        }
-    }
+    if (const ChannelModel* m = (*channels)[sched_channel]->estimated_model())
+        sched_model = *m;
 
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHARM")
@@ -171,7 +182,7 @@ int main(int argc, char* argv[])
            same rule CATS uses. */
         scheduler = std::make_unique<CHARM_scheduler>(
             sched_cfg["tx_power"],
-            sched_cfg["frequency"],
+            sched_channel,
             sched_cfg["belief_threshold"],
             sched_model,
             &buffer,
@@ -183,7 +194,7 @@ int main(int argc, char* argv[])
         /* Same parameters as CHARM — it is CHARM's policy over an EDF queue. */
         scheduler = std::make_unique<CHEDF_scheduler>(
             sched_cfg["tx_power"],
-            sched_cfg["frequency"],
+            sched_channel,
             sched_cfg["belief_threshold"],
             sched_model,
             &buffer,
@@ -201,19 +212,10 @@ int main(int argc, char* argv[])
            prediction: MPRM/MPEDF never enter RX_MODE, so nothing would ever
            hand them the value at run time. See
            BasePhysicalChannel::mean_probability(). */
-        const unsigned int sched_tx_power  = sched_cfg["tx_power"];
-        const unsigned int sched_frequency = sched_cfg["frequency"];
+        const unsigned int sched_tx_power = sched_cfg["tx_power"];
 
-        BasePhysicalChannel* sched_channel = channel_at(sched_frequency);
-
-        if (sched_channel == nullptr)
-        {
-            std::cerr << "ERROR: " << sched_type << " found no channel at frequency "
-                      << sched_frequency << std::endl;
-            return -1;
-        }
-
-        const double mean_prob = sched_channel->mean_probability(sched_tx_power);
+        const double mean_prob =
+            (*channels)[sched_channel]->mean_probability(sched_tx_power);
 
         /* A non-positive static estimate can never accumulate to a
            reliability target, so every packet would be retransmitted until
@@ -232,7 +234,7 @@ int main(int argc, char* argv[])
         {
             scheduler = std::make_unique<MPRM_scheduler>(
                 sched_tx_power,
-                sched_frequency,
+                sched_channel,
                 mean_prob,
                 &buffer,
                 system_tick
@@ -243,7 +245,7 @@ int main(int argc, char* argv[])
             /* MPRM's policy over an EDF queue -- same parameters. */
             scheduler = std::make_unique<MPEDF_scheduler>(
                 sched_tx_power,
-                sched_frequency,
+                sched_channel,
                 mean_prob,
                 &buffer,
                 system_tick
@@ -254,7 +256,7 @@ int main(int argc, char* argv[])
     {
         scheduler = std::make_unique<EDF_scheduler>(
             sched_cfg["tx_power"],
-            sched_cfg["frequency"],
+            sched_channel,
             &buffer,
             system_tick
         );
@@ -263,7 +265,7 @@ int main(int argc, char* argv[])
     {
         scheduler = std::make_unique<RM_scheduler>(
             sched_cfg["tx_power"],
-            sched_cfg["frequency"],
+            sched_channel,
             &buffer,
             system_tick
         );
@@ -289,7 +291,7 @@ int main(int argc, char* argv[])
         try
         {
             scheduler = std::make_unique<CATS_scheduler>(
-                sched_cfg["frequency"],
+                sched_channel,
                 sched_cfg["belief_threshold"],
                 sched_cfg["utilization_threshold"],
                 periodic_tasks,
@@ -432,14 +434,10 @@ int main(int argc, char* argv[])
                     std::cout    << std::endl;
                 }
 
-                auto it = std::find_if(channels->begin(), channels->end(),
-                                        [&transmitted_frame](const std::unique_ptr<BasePhysicalChannel>& ch) {
-                                            return ch->frequency == transmitted_frame.frequency;
-                                        });
-
-                if (it != channels->end())
+                if (transmitted_frame.channel < channels->size())
                 {
-                    recv_frame = (*it)->gen_frame_with_probability(transmitted_frame);
+                    recv_frame = (*channels)[transmitted_frame.channel]
+                                     ->gen_frame_with_probability(transmitted_frame);
                     bool received = target_receiver.recv_frame(recv_frame);
 
                     if (summary_only)
@@ -472,7 +470,7 @@ int main(int argc, char* argv[])
                                 {"reliability_req", transmitted_frame.packet.reliability_req}
                             }},
                             {"tx_power",         recv_frame.transmission_power},
-                            {"frequency",        recv_frame.frequency},
+                            {"channel",          recv_frame.channel},
                             {"probability",      recv_frame.success_prob},
                             {"reliability_req", recv_frame.packet.reliability_req},
                             {"received",         received}
@@ -481,7 +479,9 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    std::cerr << "ERROR: No matching channel found" << std::endl;
+                    std::cerr << "ERROR: frame scheduled on channel "
+                              << transmitted_frame.channel << ", which does not exist"
+                              << std::endl;
                 }
 
                 break;
@@ -502,12 +502,12 @@ int main(int argc, char* argv[])
                 if (scheduler->wants_state_prediction())
                 {
                     const int pred_state =
-                        ml_predictor.predict_channel_state(scheduled_frame.frequency);
+                        ml_predictor.predict_channel_state(scheduled_frame.channel);
 
                     if (!summary_only)
                     {
-                        std::cout << "Predicted state at frequency "
-                                  << scheduled_frame.frequency << "Hz: " << pred_state
+                        std::cout << "Predicted state on channel "
+                                  << scheduled_frame.channel << ": " << pred_state
                                   << std::endl;
                     }
 
@@ -517,17 +517,17 @@ int main(int argc, char* argv[])
                     {
                         frame_entry["prediction"] = {
                             {"state",       pred_state},
-                            {"frequency",   scheduled_frame.frequency}
+                            {"channel",     scheduled_frame.channel}
                         };
                     }
                 }
                 else
                 {
-                    pred_probs = ml_predictor.predict_channel_conditions(scheduled_frame.frequency, scheduler->get_prediction_powers());
+                    pred_probs = ml_predictor.predict_channel_conditions(scheduled_frame.channel, scheduler->get_prediction_powers());
 
                     if (!summary_only)
                     {
-                        std::cout << "Predicted probabilities at frequency " << scheduled_frame.frequency << "Hz:";
+                        std::cout << "Predicted probabilities on channel " << scheduled_frame.channel << ":";
                         for (size_t k = 0; k < scheduler->get_prediction_powers().size(); k++)
                             std::cout << " " << scheduler->get_prediction_powers()[k] << "W=" << pred_probs[k];
                         std::cout << std::endl;
@@ -540,7 +540,7 @@ int main(int argc, char* argv[])
                         frame_entry["prediction"] = {
                             {"powers",      scheduler->get_prediction_powers()},
                             {"probs",       pred_probs},
-                            {"frequency",   scheduled_frame.frequency}
+                            {"channel",     scheduled_frame.channel}
                         };
                     }
                 }
@@ -627,8 +627,10 @@ int main(int argc, char* argv[])
             std::cout << "\nFSMC STATUS" << std::endl;
             frame_entry["fsmc"] = json::array();
         }
-        for (auto& ch : *channels)
+        for (std::size_t c = 0; c < channels->size(); ++c)
         {
+            BasePhysicalChannel* ch = (*channels)[c].get();
+
             /* FSMC details come from the channel's own fitted model; a channel
                without one (e.g. ReplayChannel) carries no Markov state. */
             const ChannelModel* ch_model = ch->estimated_model();
@@ -637,7 +639,7 @@ int main(int argc, char* argv[])
             {
                 const markov_state_t& curve =
                     ch_model->state_curves()[static_cast<std::size_t>(fsmc_state)];
-                std::cout << "Frequency: " << ch->frequency << std::endl;
+                std::cout << "Channel: " << c << " (" << ch->name << ")" << std::endl;
                 std::cout << "State: " << fsmc_state << std::endl;
                 std::cout << "Parameters"
                           << "\nSlope: " << curve.slope
@@ -646,7 +648,8 @@ int main(int argc, char* argv[])
                 std::cout << std::endl << std::endl;
 
                 frame_entry["fsmc"].push_back({
-                    {"frequency",       ch->frequency},
+                    {"channel",         c},
+                    {"name",            ch->name},
                     {"state",           fsmc_state},
                     {"slope",           curve.slope},
                     {"snr_50_db",       curve.snr_50_db},

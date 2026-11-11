@@ -6,10 +6,10 @@
 
 #include "charm_scheduler.hpp"
 
-CHARM_scheduler::CHARM_scheduler(unsigned int tx_power, unsigned int frequency, float belief_threshold,
+CHARM_scheduler::CHARM_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
                                std::optional<ChannelModel> model, BufferPacket* buffer,
                                std::shared_ptr<unsigned int> sys_tick):
-    BaseScheduler(buffer, sys_tick), tx_power(tx_power), frequency(frequency),
+    BaseScheduler(buffer, sys_tick), tx_power(tx_power), channel(channel),
     belief(0.0f), belief_threshold(belief_threshold), model(std::move(model)),
     believed_state(-1), transmission_prob(0)
 {
@@ -27,7 +27,7 @@ scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
     scheduled_frame.transmission_power = this->tx_power;
-    scheduled_frame.frequency = this->frequency;
+    scheduled_frame.channel = this->channel;
 
     /* Listen as soon as the estimate is no longer trusted. Belief decays at
        the rate the believed state is expected to persist, so this replaces the
@@ -116,7 +116,7 @@ void CHARM_scheduler::receive_state(int state)
        number; see CATS for the whole row.
 
        A label of -1 means the predictor had nothing to offer (an unknown
-       frequency). Keep the previous estimate rather than inventing one: the
+       channel). Keep the previous estimate rather than inventing one: the
        slot is already spent and the belief reset is what matters. */
     if (!this->model.has_value() || state < 0) return;
 

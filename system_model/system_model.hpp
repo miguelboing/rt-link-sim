@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -38,7 +39,14 @@ typedef struct
 {
     packet_t* packet;
     unsigned int transmission_power;
-    unsigned int frequency;
+
+    /* c_sel(t): which channel of C = {0, ..., C-1} this slot uses. The index
+       *is* the channel's identity -- it is the position in the simulator's
+       channel vector, and the scheduler's channel set is in the same order.
+       A channel's name (its directory under physical_channels/) is carried by
+       the channel itself, for logs and errors. */
+    std::size_t channel = 0;
+
     radio_mode_e radio_mode;
     bool remove_from_buffer = true;
 } scheduled_frame_t;
@@ -47,14 +55,14 @@ typedef struct
 {
     packet_t packet;
     unsigned int transmission_power;
-    unsigned int frequency;
+    std::size_t channel = 0;   /* c: the channel this frame went out on */
 } transmitted_frame_t;
 
 typedef struct
 {
     packet_t packet;
     unsigned int transmission_power;
-    unsigned int frequency;
+    std::size_t channel = 0;   /* c: the channel this frame arrived on */
     double success_prob;
 } received_frame_t;
 

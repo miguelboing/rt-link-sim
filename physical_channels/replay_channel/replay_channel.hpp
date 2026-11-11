@@ -17,7 +17,7 @@
 class ReplayChannel: public BasePhysicalChannel
 {
 public:
-    ReplayChannel(unsigned int frequency,
+    ReplayChannel(const std::string& name,
                   const std::string& csv_path,
                   std::shared_ptr<unsigned int> sys_tick);
 
