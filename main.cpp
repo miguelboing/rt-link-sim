@@ -162,18 +162,37 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    /* The estimated channel model the scheduler reasons with: a *copy* of the
-       fitted FSMC of the channel it operates on. Holding its own copy is what
-       lets the estimated model be perturbed away from the physical one later
-       without the channel noticing; as shipped the two are identical, which
-       is the zero-mismatch reference case.
+    /* The scheduler's channel set: its own *copy* of the fitted model of
+       every channel in C, in the simulator's channel order, so the index c
+       addresses the same channel on both sides. A scheduler that reasons about
+       the channel reads its decode estimates and its confidence out of this
+       and holds no per-channel state of its own.
 
-       Empty when the channel has no model to copy (ReplayChannel, a recorded
-       trace with no state space). Such a scheduler keeps taking decode
-       probabilities from the predictor instead of state labels. */
-    std::optional<ChannelModel> sched_model;
-    if (const ChannelModel* m = (*channels)[sched_channel]->estimated_model())
-        sched_model = *m;
+       Copies, not pointers, because the estimated model is meant to be
+       perturbable (Delta_A, Delta_rho) independently of the physical channel;
+       as shipped the two are identical, which is the zero-mismatch reference
+       case.
+
+       Every channel must have one. A channel with no fitted model has no
+       state space to label and no A_ss to age by, so it cannot be an entry --
+       and leaving it out would renumber every channel after it. There is no
+       longer a fallback for that case: the scheduler reasons about an FSMC or
+       there is nothing for it to reason about, so say so here rather than let
+       a run proceed on an estimate nobody can age. */
+    std::vector<channel_estimate_t> sched_channels;
+    sched_channels.reserve(channels->size());
+    for (std::size_t c = 0; c < channels->size(); ++c)
+    {
+        const ChannelModel* m = (*channels)[c]->estimated_model();
+        if (m == nullptr)
+        {
+            std::cerr << "ERROR: channel " << c << " (" << (*channels)[c]->name
+                      << ") has no fitted FSMC, which a scheduler has no way to"
+                         " reason about" << std::endl;
+            return -1;
+        }
+        sched_channels.push_back({(*channels)[c]->name, *m});
+    }
 
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHARM")
@@ -184,7 +203,6 @@ int main(int argc, char* argv[])
             sched_cfg["tx_power"],
             sched_channel,
             sched_cfg["belief_threshold"],
-            sched_model,
             &buffer,
             system_tick
         );
@@ -196,7 +214,6 @@ int main(int argc, char* argv[])
             sched_cfg["tx_power"],
             sched_channel,
             sched_cfg["belief_threshold"],
-            sched_model,
             &buffer,
             system_tick
         );
@@ -299,7 +316,6 @@ int main(int argc, char* argv[])
                 sched_cfg.value("tx_power", 25U),
                 sched_cfg.value("early_drop", true),
                 sched_cfg.value("urgency_check", true),
-                sched_model,
                 &buffer,
                 system_tick
             );
@@ -316,6 +332,11 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    /* After construction, so adding the set did not have to ripple through
+       the constructor of every scheduler that ignores it. Given to all of
+       them: the ones that do not reason about the channel never read it. */
+    scheduler->set_channels(std::move(sched_channels));
+
     if (summary_only) scheduler->set_log_enabled(false);
 
     scheduled_frame_t scheduled_frame;
@@ -327,22 +348,21 @@ int main(int argc, char* argv[])
     /* Initialize the ML Predictor */
     const double predict_error = config["simulation"].value("predict_error", 0.0);
 
-    /* predict_error perturbs a predicted decode *probability*, and a scheduler
-       holding an estimated model is handed a state label instead -- there is
-       no probability in that path to perturb. State-prediction error is the
-       confusion matrix E_c and is not implemented yet, so say so rather than
-       let a sweep draw three identical curves and read them as insensitivity
-       to prediction error. */
-    if (predict_error > 0.0 && scheduler->wants_state_prediction())
+    /* predict_error perturbs a predicted decode *probability*, and the
+       predictor returns a state label -- there is nothing in that path to
+       perturb, and now that every channel is an FSMC there is no other path.
+       State-prediction error is the confusion matrix E_c and is not
+       implemented yet, so say so rather than let a sweep draw identical curves
+       at every error level and read them as insensitivity to prediction
+       error. */
+    if (predict_error > 0.0)
         std::cerr << "WARNING: predict_error=" << predict_error
-                  << " has no effect on " << sched_type
-                  << ": it predicts a channel state, and state-prediction"
-                     " error (the confusion matrix) is not implemented."
-                  << std::endl;
+                  << " has no effect: the predictor returns a channel state,"
+                     " and state-prediction error (the confusion matrix) is"
+                     " not implemented." << std::endl;
 
     MLPredictor ml_predictor(system_tick, channels, predict_error);
     if (has_seed) ml_predictor.seed_rng(seed + 0x300);
-    std::vector<double> pred_probs;
 
     /* Initialize the target receiver */
     TargetReceiver target_receiver(system_tick);
@@ -493,13 +513,12 @@ int main(int argc, char* argv[])
                     frame_entry["radio_mode"] = "RX_MODE";
                 }
 
-                /* What an RX slot buys depends on what the scheduler can do
-                   with it. Holding an estimated model, it wants the observed
-                   model state and derives the decode probabilities itself from
-                   its own response curves; with no model (a recorded trace,
-                   which has no state space) it still takes the probabilities
-                   ready-made. */
-                if (scheduler->wants_state_prediction())
+                /* An RX slot buys one thing: the model-state label observed
+                   on the channel it was spent on. The scheduler derives its own
+                   decode probabilities from it, off its copy of that channel's
+                   response curves -- so a single observation refreshes every
+                   power tier together, from the same state and with the same
+                   age. */
                 {
                     const int pred_state =
                         ml_predictor.predict_channel_state(scheduled_frame.channel);
@@ -511,35 +530,12 @@ int main(int argc, char* argv[])
                                   << std::endl;
                     }
 
-                    scheduler->receive_state(pred_state);
+                    scheduler->receive_state(scheduled_frame.channel, pred_state);
 
                     if (!summary_only)
                     {
                         frame_entry["prediction"] = {
                             {"state",       pred_state},
-                            {"channel",     scheduled_frame.channel}
-                        };
-                    }
-                }
-                else
-                {
-                    pred_probs = ml_predictor.predict_channel_conditions(scheduled_frame.channel, scheduler->get_prediction_powers());
-
-                    if (!summary_only)
-                    {
-                        std::cout << "Predicted probabilities on channel " << scheduled_frame.channel << ":";
-                        for (size_t k = 0; k < scheduler->get_prediction_powers().size(); k++)
-                            std::cout << " " << scheduler->get_prediction_powers()[k] << "W=" << pred_probs[k];
-                        std::cout << std::endl;
-                    }
-
-                    scheduler->receive_prediction(pred_probs);
-
-                    if (!summary_only)
-                    {
-                        frame_entry["prediction"] = {
-                            {"powers",      scheduler->get_prediction_powers()},
-                            {"probs",       pred_probs},
                             {"channel",     scheduled_frame.channel}
                         };
                     }

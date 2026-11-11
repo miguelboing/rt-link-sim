@@ -168,15 +168,26 @@ one listen refreshes all power levels together, from the same state, and a
 wrong label moves them all at once.
 
 Each of CHARM, CHEDF and CATS therefore carries a copy of the fitted FSMC of
-the channel it operates on, taken from the `channels` block at index
-`channel`. A channel without a fitted model (`replay`)
+**every** channel, held by `BaseScheduler` as the channel set: one entry per
+channel in the `channels` block, in that order, so the index `c` names the same
+channel on both sides. An entry is the model plus the last label inferred on
+that channel -- the estimate, and nothing else. Decode estimates are read off
+it on demand rather than cached, so a scheduler can ask about a channel it is
+not transmitting on, which is what choosing a channel per slot will need.
+
+How much a scheduler still trusts a label, and when it spends a slot refreshing
+it, is a *policy* and lives outside the base: `BeliefTracker`
+(`schedulers/policies/belief_tracker.hpp`) holds one belief per channel, decays
+each by its believed state's `A_ss` once per slot, and is restored to 1 by an
+observation. The three schedulers hold one each by composition because they
+share that rule; a scheduler that refreshes on a different rule holds none. A channel without a fitted model (`replay`)
 hands over decode probabilities directly instead, as before.
 
-All three refresh on the same rule. Confidence in the last prediction decays on
-every transmitting slot and a listen restores it, so the scheduler listens once
-confidence falls below `belief_threshold` rather than on a fixed interval. The
-decay factor is the self-transition probability `A_ss` of the state it believes
-the channel is in, so confidence after `d` slots is `A_ss^d` -- the model
+All three refresh on the same rule. Belief in the last prediction decays on
+every slot and a listen restores it, so the scheduler listens once belief falls
+below `belief_threshold` rather than on a fixed interval. The decay factor is
+the self-transition probability `A_ss` of the state it believes the channel is
+in, so belief `d` slots after the observation is `A_ss^d` -- the model
 probability the channel has not left that state, with `1 - A_ss` the per-slot
 probability of leaving. The refresh interval is
 `ceil(ln(belief_threshold) / ln(A_ss))`, which differs per channel *and* per
@@ -234,7 +245,7 @@ default. A config that sets none of them is the published CATS.
 |---|---|
 | `adaptive_power` | Every power decision is pinned to `tx_power`, which must name a predictor tier (1, 10 or 25 W). The same power drives the demand, infeasibility and urgency calculations, so no adaptive cap survives anywhere. |
 | `early_drop` | Packets that cannot reach their reliability target in the slots remaining stay queued until deadline expiry or normal retirement. They are still classified as infeasible, so they do not become "urgent" and suppress listening. |
-| `urgency_check` | Listening depends on confidence alone, so a listen can consume a slot a near-deadline packet needed. Power selection and dropping are unaffected. |
+| `urgency_check` | Listening depends on belief alone, so a listen can consume a slot a near-deadline packet needed. Power selection and dropping are unaffected. |
 
 The `cats_comparison` sweep mode plots seven variants of these switches against
 each other.
@@ -550,7 +561,8 @@ run_simulation.py                # experiment harness: task sets, sweeps, plots
 run_slurm.sh                     # SLURM submission template
 schedulers.hpp                   # umbrella include for all schedulers
 schedulers/
-  base_scheduler.hpp             # interface
+  base_scheduler.hpp             # interface, plus the channel estimate set
+  policies/                      # decision rules shared by several schedulers
   cats/                          # CATS, channel and belief aware
   charm/                         # CHARM, redundancy from a listened estimate
   chedf/                         # the same over an EDF queue
@@ -593,10 +605,12 @@ parent Makefile, add the include to `schedulers.hpp`, and extend the
 
 Two traps worth knowing about:
 
-- `get_prediction_powers()` must return the power the scheduler actually
-  transmits at. CHARM once hardcoded 10 W while transmitting at its configured
-  power, which silently made a 25 W run decide retransmissions from the 10 W
-  decode probability.
+- A scheduler must decide from the decode estimate of the power it actually
+  transmits at. CHARM once asked the predictor for 10 W while transmitting at
+  its configured power, which silently made a 25 W run size retransmissions
+  from the 10 W curve. `rho_hat(c, P)` takes the power as an argument now, so
+  there is no separate request to get out of step -- but a scheduler can still
+  pass the wrong `P`.
 - `get_name()` has to embed the power for any scheduler type that runs at more
   than one power level, or two runs overwrite each other's
   `<scheduler>_scheduled_packets.json`.

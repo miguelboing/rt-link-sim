@@ -1,10 +1,10 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <vector>
 
 #include "schedulers/base_scheduler.hpp"
+#include "schedulers/policies/belief_tracker.hpp"
 #include "packet_generators/base_packet_generator.hpp"
 #include <unordered_map>
 
@@ -22,8 +22,8 @@
        suppress listening;
      - urgency_check off removes only the urgency term from the listening
        condition, leaving belief, power selection and dropping untouched.
-   The belief update (reset on RX, decay by the believed state's A_ss on TX)
-   and the cached predictor estimates are identical in every combination.
+   The belief update (reset on an observation, decay by the believed state's
+   A_ss every slot) is identical in every combination.
 
    The predictor hands over a model-state label, not probabilities. CATS holds
    its own copy of the channel's fitted FSMC and reads the whole row
@@ -45,7 +45,6 @@ public:
                    unsigned int fixed_tx_power,
                    bool early_drop,
                    bool urgency_check,
-                   std::optional<ChannelModel> model,
                    BufferPacket* buffer,
                    std::shared_ptr<unsigned int> sys_tick);
 
@@ -57,7 +56,7 @@ public:
     /* --- Ablation switches ------------------------------------------------ */
 
     /* When false, every power decision collapses to fixed_power_idx: the
-       selection loop considers only that tier and receive_prediction() leaves
+       selection loop considers only that tier and update_power_cap() leaves
        the cap alone, so p_best is that tier's probability too. */
     bool adaptive_power;
     unsigned int fixed_power_idx;   /* index into POWER_LEVELS; unused when adaptive */
@@ -71,20 +70,15 @@ public:
        term. The empty-buffer listen is unaffected either way. */
     bool urgency_check;
 
-    float belief;
+    /* Belief in the label last heard on each channel, and the floor below
+       which CATS gives up a slot to refresh it. The listening policy is CATS's,
+       not the base's: the base holds the estimate, this holds what is made of
+       it. Shared with CHARM and CHEDF by composition -- see
+       schedulers/policies/belief_tracker.hpp. Neither the state nor the
+       model nor the row of decode estimates is a member any more; those are
+       the estimate, and they live in the channel set. */
+    BeliefTracker belief;
     float belief_threshold;
-
-    /* CATS's own copy of the channel's fitted FSMC: the decay rate for belief
-       and the source of every decode estimate below. Empty for a channel with
-       no model (ReplayChannel), which is the only case still fed
-       probabilities directly. */
-    std::optional<ChannelModel> model;
-
-    /* s_hat: the last state the predictor labelled, or -1 before the first
-       observation. */
-    int believed_state;
-
-    double transmission_prob[3];
     std::unordered_map<uint64_t, double> accumulated_prob;
 
     /* A-priori knowledge of the periodic task set (populated at construction).
@@ -105,14 +99,10 @@ public:
 
     scheduled_frame_t do_schedule_frame(void) override;
 
-    void receive_prediction(const std::vector<double>& pred_probs) override;
-
-    /* One state label refreshes all three tiers: transmission_prob[i] becomes
-       rho_hat(s, POWER_LEVELS[i]) off this scheduler's own response curves. */
-    void receive_state(int state) override;
-    bool wants_state_prediction() const override { return this->model.has_value(); }
-
-    std::vector<unsigned int> get_prediction_powers() const override { return {1, 10, 25}; }
+    /* One state label refreshes all three tiers at once, because all three
+       are read off the same label by prob_at(). Overridden only to recompute
+       the power cap: the base's own job is to record the observation. */
+    void receive_state(std::size_t c, int state) override;
 
     std::string get_name() const override;
 
@@ -130,6 +120,17 @@ public:
     double compute_utilization(double p) const;
 
 private:
+    /* rho_hat_{c,j}(t) at tier j on the channel this scheduler transmits on.
+       Derived from the label last observed there, so the three tiers always
+       come from one state and one age -- which is why a mislabelled state
+       moves power selection, demand and urgency together rather than one of
+       them. Before the first observation it is the channel's fitted
+       stationary average, so no tier ever reads as flatly impossible. */
+    double prob_at(unsigned int j) const
+    {
+        return this->rho_hat(this->channel, POWER_LEVELS[j]);
+    }
+
     /* Slack-aware power cap, recomputed whenever the estimates move: the
        lowest tier whose predicted U fits under the threshold. Shared by both
        prediction paths so the cap cannot depend on which one delivered the

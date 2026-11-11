@@ -7,21 +7,9 @@
 #include "charm_scheduler.hpp"
 
 CHARM_scheduler::CHARM_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
-                               std::optional<ChannelModel> model, BufferPacket* buffer,
-                               std::shared_ptr<unsigned int> sys_tick):
+                               BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick):
     BaseScheduler(buffer, sys_tick), tx_power(tx_power), channel(channel),
-    belief(0.0f), belief_threshold(belief_threshold), model(std::move(model)),
-    believed_state(-1), transmission_prob(0)
-{
-    /* Before the first observation the state label is unavailable, so the
-       estimate to stand in for it is the model's stationary average -- the
-       long-run decode probability at this power. Belief starts at 0, so the
-       first slot is a listen and this value is replaced before it can size a
-       retransmission; it is here so the scheduler is never holding a
-       probability of zero, which no channel has. */
-    if (this->model.has_value())
-        this->transmission_prob = this->model->rho_bar(this->tx_power);
-};
+    belief_threshold(belief_threshold) {};
 
 scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
 {
@@ -29,22 +17,33 @@ scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
     scheduled_frame.transmission_power = this->tx_power;
     scheduled_frame.channel = this->channel;
 
-    /* Listen as soon as the estimate is no longer trusted. Belief decays at
-       the rate the believed state is expected to persist, so this replaces the
-       fixed rx_period interval with one the channel's dynamics set. No urgency
-       guard here, unlike CATS: the test is belief alone. */
-    if (this->belief < this->belief_threshold)
+    /* One slot of belief decay, for every channel. This scheduler's
+       policy, so this scheduler ticks it -- the base holds the estimate and
+       makes no assumption about what is made of it. */
+    this->belief.age(this->get_channels());
+
+    /* rho_hat_{c,j}(t): the decode estimate for this channel at this power,
+       derived from the label last observed on it -- or from the channel's
+       fitted stationary statistics while it has never been observed, which is
+       what keeps a first transmission from being sized off a zero. */
+    const double transmission_prob = this->rho_hat(this->channel, this->tx_power);
+
+    /* Listen as soon as the estimate is no longer trusted. The decay rate is
+       the believed state's own A_ss, so the interval that emerges is the one
+       the channel's dynamics imply rather than a tuned clock. No urgency guard
+       here, unlike CATS: the test is belief alone.
+
+       Nothing is assigned on either side of this test: the ageing above and
+       receive_state() below are the only two things that move belief. An
+       RX slot that comes back with no usable label therefore buys none, and
+       the scheduler listens again. */
+    if (this->belief.stale(this->channel, this->belief_threshold))
     {
         scheduled_frame.radio_mode = RX_MODE;
         scheduled_frame.packet = nullptr;
-        this->belief = 1.0f;
     }
     else /* If it is not try to schedule a packet */
     {
-        /* Belief drops: one more slot since the estimate was refreshed. The
-           factor is the believed state's own A_ss, so what decays is the
-           model probability the channel has not left that state. */
-        this->belief *= belief_decay(this->model, this->believed_state);
 
         /* Find the packet with the smaller period */
         auto lowest_it = std::min_element(this->buffer_packet->begin(),
@@ -65,13 +64,13 @@ scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
             /* Check if this frame is being transmitted for the first time */
             if (accumulated_prob.find(key) == accumulated_prob.end())
             {
-                accumulated_prob[key] = this->transmission_prob;
+                accumulated_prob[key] = transmission_prob;
             }
             else
             {
                 /* Calculate the accumulated prob after this transmission */
                 accumulated_prob[key] =
-                    accumulated_prob[key] + this->transmission_prob - accumulated_prob[key] * this->transmission_prob;
+                    accumulated_prob[key] + transmission_prob - accumulated_prob[key] * transmission_prob;
             }
 
             /* Check if the prob is high enough to remove this frame from the buffer */
@@ -88,41 +87,16 @@ scheduled_frame_t CHARM_scheduler::do_schedule_frame(void)
         }
         else
         {
-            /* Nothing rankable to send, so spend the slot listening. That is
-               a real refresh, so the belief this slot just decayed is
-               restored -- as CATS does on the same fallback. */
+            /* Nothing rankable to send, so spend the slot listening -- as
+               CATS does on the same fallback. The refresh needs no statement
+               here: the slot is an RX slot, so the observation it returns
+               moves tau_c and belief follows from that. */
             scheduled_frame.packet = nullptr;
             scheduled_frame.radio_mode = RX_MODE;
-            this->belief = 1.0f;
         }
     }
 
     return scheduled_frame;
-}
-
-void CHARM_scheduler::receive_prediction(const std::vector<double>& pred_probs)
-{
-    /* Only reached for a channel with no estimated model to read a state label
-       in; otherwise receive_state() below is called instead. */
-    this->transmission_prob = pred_probs[0]; /* Only tx_power is predicted */
-}
-
-void CHARM_scheduler::receive_state(int state)
-{
-    /* One observation, one label -- and the decode estimate is derived from it
-       here rather than delivered ready-made. The scheduler owns the response
-       curves, so this is where rho_hat_{s,j} comes from, and a wrong label
-       moves every power level together. At a single fixed power that is one
-       number; see CATS for the whole row.
-
-       A label of -1 means the predictor had nothing to offer (an unknown
-       channel). Keep the previous estimate rather than inventing one: the
-       slot is already spent and the belief reset is what matters. */
-    if (!this->model.has_value() || state < 0) return;
-
-    this->believed_state = state;
-    this->transmission_prob = this->model->rho(static_cast<std::size_t>(state),
-                                               this->tx_power);
 }
 
 std::string CHARM_scheduler::get_name() const {

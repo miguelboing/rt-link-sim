@@ -2,9 +2,8 @@
 
 #include <memory>
 
-#include <optional>
-
 #include "schedulers/base_scheduler.hpp"
+#include "schedulers/policies/belief_tracker.hpp"
 #include <unordered_map>
 
 /* CHARM -- accumulated-probability retransmission over a period-ordered
@@ -14,20 +13,19 @@
    RX_MODE whatever the channel is doing. That is a fixed-interval stand-in
    for the question actually being asked -- "is the estimate I am holding
    still worth anything?" -- so it is replaced here by the belief test CATS
-   uses: confidence is restored to 1 by a listen and decays on every slot
-   spent transmitting, and the scheduler listens as soon as it falls below
+   uses: belief is restored to 1 by a listen and decays on every slot after
+   that, and the scheduler listens as soon as it falls below
    belief_threshold. The interval that emerges is the one the channel's own
    dynamics imply, so it is no longer a parameter to tune: `rx_period` is gone
    and `belief_threshold` takes its place.
 
    What it decays by is the scheduler's own model. Holding a copy of the
    channel's fitted FSMC, it knows the believed state's self-transition
-   probability A_ss, so confidence after d transmitting slots is A_ss^d -- the
+   probability A_ss, so belief d slots after the observation is A_ss^d -- the
    model probability the channel has not left that state, with 1 - A_ss the
    per-slot probability of leaving. That is per channel *and* per state: the
    same scheduler refreshes after 18 slots in a state the chain holds for 50
-   and after 178 in one it holds for 500. Only a channel with no model at all
-   falls back to the BELIEF_DECAY constant.
+   and after 178 in one it holds for 500.
 
    Unlike CATS this does *not* carry the `no_urgent_packet` guard -- it
    listens purely on belief, so a listen can consume a slot a near-deadline
@@ -44,8 +42,7 @@ class CHARM_scheduler : public BaseScheduler
 {
 public:
     CHARM_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
-                    std::optional<ChannelModel> model, BufferPacket* buffer,
-                    std::shared_ptr<unsigned int> sys_tick);
+                    BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
 
     unsigned int tx_power;
 
@@ -54,39 +51,30 @@ public:
        channel set. */
     std::size_t channel;
 
-    /* Confidence that the last prediction still describes the channel: 1
-       immediately after a listen, decaying by the believed state's A_ss each
-       slot spent transmitting. Starts at 0 so the first slot is always a
-       listen, which is what stops the scheduler transmitting on an unset
-       estimate. */
-    float belief;
+    /* Belief in the label last heard on each channel, and the floor below
+       which this scheduler gives up a slot to refresh it. The listening policy
+       is this scheduler's, not the base's: the base holds the estimate, this
+       holds what is made of it. Shared with CHEDF and CATS by composition --
+       see schedulers/policies/belief_tracker.hpp for why it is a held object
+       rather than something the base provides. */
+    BeliefTracker belief;
     float belief_threshold;
-
-    /* The scheduler's own copy of the channel's fitted FSMC -- its estimated
-       model, which supplies both the decay rate above and the decode
-       probability below. Empty for a channel that has none, which is the only
-       case that still takes a probability from the predictor. */
-    std::optional<ChannelModel> model;
-
-    /* s_hat: the last model state the predictor labelled, or -1 before the
-       first observation. The decode estimate is read off the model at this
-       state rather than handed over ready-made. */
-    int believed_state;
-
-    double transmission_prob;
     std::unordered_map<uint64_t, double> accumulated_prob;
 
     scheduled_frame_t do_schedule_frame(void) override;
 
-    void receive_prediction(const std::vector<double>& pred_probs) override;
+    /* Record the observation (the base's job), then restore belief in it (this
+       scheduler's). Only a label that was actually recorded counts as a
+       refresh, so a listen that came back with nothing leaves belief where it
+       was and the scheduler listens again.
 
-    /* The predictor hands over a state label; the decode probability comes
-       from this scheduler's own response curve for that state. */
-    void receive_state(int state) override;
-    bool wants_state_prediction() const override { return this->model.has_value(); }
-    /* CHARM transmits at a single fixed power, so it only ever needs the
-       decode probability at that power. */
-    std::vector<unsigned int> get_prediction_powers() const override { return {this->tx_power}; }
+       Nothing else happens here. The decode estimate is *not* cached from the
+       label: rho_hat() derives it on demand, which is what lets this scheduler
+       ask about a channel it is not transmitting on. */
+    void receive_state(std::size_t c, int state) override
+    {
+        if (BaseScheduler::observe_state(c, state)) this->belief.observed(c);
+    }
 
     std::string get_name() const override;
 };

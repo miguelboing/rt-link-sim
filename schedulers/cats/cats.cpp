@@ -19,7 +19,6 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
                                unsigned int fixed_tx_power,
                                bool early_drop,
                                bool urgency_check,
-                               std::optional<ChannelModel> model,
                                BufferPacket* buffer,
                                std::shared_ptr<unsigned int> sys_tick):
     BaseScheduler(buffer, sys_tick),
@@ -29,8 +28,6 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
     early_drop(early_drop),
     urgency_check(urgency_check),
     belief_threshold(belief_threshold),
-    model(std::move(model)),
-    believed_state(-1),
     periodic_tasks(periodic_tasks),
     horizon_H(0U),
     utilization_threshold(utilization_threshold),
@@ -55,17 +52,6 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
            demand, infeasibility and urgency all read that tier too. */
         this->max_power_idx = this->fixed_power_idx;
     }
-
-    /* Before the first observation there is no state label, so the estimates
-       stand at the model's stationary averages -- the long-run decode
-       probability of each tier. Belief starts at 0, so the first slot is a
-       listen and these are replaced before they size a transmission; they are
-       set so no tier ever reads as flatly impossible, which a zero would. */
-    for (unsigned int i = 0U; i < N_POWERS; i++)
-        this->transmission_prob[i] = this->model.has_value()
-                                     ? this->model->rho_bar(POWER_LEVELS[i])
-                                     : 0.0;
-    this->belief = 0.0;
 
     /* Horizon = LCM of all task periods. Demand within one hyperperiod is
        exact (every task completes an integer number of releases), so the
@@ -121,6 +107,11 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     scheduled_frame_t scheduled_frame;
     scheduled_frame.channel = this->channel;
 
+    /* One slot of belief decay, for every channel. CATS's policy, so CATS
+       ticks it -- the base holds the estimate and makes no assumption about
+       what is made of it. */
+    this->belief.age(this->get_channels());
+
     /* Classify every buffered packet, then act on the classification. The two
        are kept separate so the early_drop switch governs *removal* only: with
        dropping off, an infeasible packet stays queued but is still classified
@@ -130,13 +121,13 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
 
        Per-frame slot cost is the number of retransmissions needed to hit the
        per-frame RR target (pow(RR, 1/frames)) at the best channel probability
-       we'll actually allow (transmission_prob[max_power_idx]) — the cap is a
+       we'll actually allow (prob_at(max_power_idx)) — the cap is a
        hard energy limit, so feasibility past it is moot. In fixed-power mode
        that index is the fixed tier, so the same power drives demand,
        infeasibility and urgency as is transmitted.
        Pre-prediction (p_best == 0) we fall back to 1 slot/frame so packets
        aren't all dropped before the first prediction lands. */
-    const double p_best = this->transmission_prob[this->max_power_idx];
+    const double p_best = this->prob_at(this->max_power_idx);
     std::vector<std::pair<unsigned int, unsigned int>> infeasible;
     bool no_urgent_packet = true;
     for (auto& pkt : *this->buffer_packet)
@@ -173,22 +164,19 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     /* Listen if we don't trust the channel. With the urgency check on, hold
        off while a packet is on the edge of its deadline; with it off, listen
        regardless. Belief handling is identical either way. */
-    if (this->belief < this->belief_threshold && (!this->urgency_check || no_urgent_packet))
+    /* Belief decays at the believed state's own A_ss -- per channel and
+       per state, not one tuned constant for all of them, and every channel
+       ages whether the radio is using it or not. Nothing is assigned on either
+       side of this test: the ageing above and receive_state() below are the
+       only two things that move it. */
+    if (this->belief.stale(this->channel, this->belief_threshold)
+        && (!this->urgency_check || no_urgent_packet))
     {
         scheduled_frame.radio_mode = RX_MODE;
         scheduled_frame.packet = nullptr;
-        this->belief = 1.0;
     }
     else /* If it isn't, try to schedule a packet */
     {
-        /* Belief drops */
-        /* One more slot since the last observation. The factor is the A_ss of
-           the state CATS believes the channel is in, so belief is the model
-           probability it has not left that state; 1 - A_ss is the per-slot
-           probability of leaving. Per channel and per state, not one tuned
-           constant for all of them. */
-        this->belief *= belief_decay(this->model, this->believed_state);
-
         /* Find the packet with the earliest deadline */
         auto lowest_it = std::min_element(this->buffer_packet->begin(),
                                           this->buffer_packet->end(),
@@ -207,9 +195,10 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
             double acc = (accumulated_prob.find(key) != accumulated_prob.end())
                          ? accumulated_prob[key] : 0.0;
 
-            /* max_power_idx is set by receive_prediction based on the slack
-               policy: pick the lowest tier whose predicted U fits below the
-               threshold, then cap the selection loop there to save energy. */
+            /* max_power_idx is set by update_power_cap() on each new
+               observation, following the slack policy: pick the lowest tier
+               whose predicted U fits below the threshold, then cap the
+               selection loop there to save energy. */
             /* Adaptive: walk tiers from the bottom and take the first that
                clears the requirement. Fixed: the loop spans the single fixed
                tier, so that is always the one chosen. */
@@ -217,7 +206,8 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
             int chosen_idx = -1;
             for (unsigned int i = lo_idx; i <= this->max_power_idx; i++)
             {
-                double acc_after = acc + transmission_prob[i] - acc * transmission_prob[i];
+                const double p_i = this->prob_at(i);
+                double acc_after = acc + p_i - acc * p_i;
                 if (acc_after >= req)
                 {
                     chosen_idx = static_cast<int>(i);
@@ -228,8 +218,8 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
             if (chosen_idx >= 0)
             {
                 /* Accumulated probability meets requirement — remove from buffer */
-                accumulated_prob[key] = acc + transmission_prob[chosen_idx]
-                                        - acc * transmission_prob[chosen_idx];
+                const double p_sel = this->prob_at(static_cast<unsigned int>(chosen_idx));
+                accumulated_prob[key] = acc + p_sel - acc * p_sel;
                 scheduled_frame.transmission_power = power_levels[chosen_idx];
                 scheduled_frame.remove_from_buffer = true;
                 accumulated_prob.erase(key);
@@ -238,8 +228,8 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
             {
                 /* No allowed tier clears the requirement yet — burn the cap
                    tier and keep retransmitting on the next slot. */
-                accumulated_prob[key] = acc + transmission_prob[this->max_power_idx]
-                                        - acc * transmission_prob[this->max_power_idx];
+                const double p_cap = this->prob_at(this->max_power_idx);
+                accumulated_prob[key] = acc + p_cap - acc * p_cap;
                 scheduled_frame.transmission_power = power_levels[this->max_power_idx];
                 scheduled_frame.remove_from_buffer = false;
             }
@@ -249,42 +239,31 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
         }
         else
         {
+            /* Nothing queued, so spend the slot listening. The refresh needs
+               no statement here: the slot is an RX slot, so the observation it
+               returns moves tau_c and belief follows from that. */
             scheduled_frame.packet = nullptr;
             scheduled_frame.radio_mode = RX_MODE;
-            this->belief = 1.0;
         }
     }
 
     return scheduled_frame;
 }
 
-void CATS_scheduler::receive_prediction(const std::vector<double>& pred_probs)
+void CATS_scheduler::receive_state(std::size_t c, int state)
 {
-    /* Only reached for a channel with no estimated model to read a state label
-       in; otherwise receive_state() below is called instead. */
-    std::copy(pred_probs.begin(), pred_probs.end(), this->transmission_prob);
-    this->update_power_cap();
-}
+    /* The predictor returns one label for the channel the slot was spent on.
+       Recording it is the base's job; restoring belief in it is CATS's,
+       and so is re-running the slack policy, whose tiers all read off the
+       label that just moved. Nothing else is derived here, since prob_at()
+       reads the whole row on demand -- which is what makes all three tiers
+       share one state and one age.
 
-void CATS_scheduler::receive_state(int state)
-{
-    /* The predictor returns one label for the slot it observed, and the whole
-       row of per-power estimates is derived from it here, off CATS's own copy
-       of the fitted response curves. All three tiers therefore come from the
-       same state and have the same age -- which is the point: an incorrect
-       label moves power selection, demand and urgency together rather than one
-       of them.
+       A label of -1 records nothing, so it refreshes no belief and leaves
+       the cap where it was. */
+    if (!BaseScheduler::observe_state(c, state)) return;
 
-       -1 means the predictor had no label to give (an unknown channel); keep
-       the estimates as they stand, since the slot is spent either way and the
-       belief reset is what the listen bought. */
-    if (!this->model.has_value() || state < 0) return;
-
-    this->believed_state = state;
-    for (unsigned int i = 0U; i < N_POWERS; i++)
-        this->transmission_prob[i] = this->model->rho(static_cast<std::size_t>(state),
-                                                      POWER_LEVELS[i]);
-
+    this->belief.observed(c);
     this->update_power_cap();
 }
 
@@ -302,7 +281,7 @@ void CATS_scheduler::update_power_cap(void)
     unsigned int new_cap = N_POWERS - 1U;
     for (unsigned int i = 0U; i < N_POWERS; i++)
     {
-        const double U = this->compute_utilization(this->transmission_prob[i]);
+        const double U = this->compute_utilization(this->prob_at(i));
         if (U <= this->utilization_threshold)
         {
             new_cap = i;

@@ -43,11 +43,18 @@ The physical channel is a finite-state Markov chain. Each state carries a sigmoi
 \rho_s(\mathrm{SNR}) = \frac{\gamma_s}{1 + \exp\!\left(-\alpha_s \left(\mathrm{SNR} - \beta_s\right)\right)}
 ```
 
-Both the chain and the curves are data rather than code, so a different channel is a different pair of files. The example shipped in `physical_channels/channel_20m/` is a 6-state ring carrying three distinct curves, mirrored so the walk descends from Good to Poor and climbs back:
+Both the chain and the curves are data rather than code, so a different channel is a different pair of files, and the state count is read from them rather than compiled in. Four channels ship with the simulator, each a named propagation regime:
+
+| Channel | States | Regime |
+|---|---|---|
+| `cyclic_fast_6` | 6 | One-way ring through Good, Moderate and Poor, mean dwell 50 slots |
+| `cyclic_slow_8` | 8 | The same ring over all four curves, at half the speed |
+| `good_moderate_2` | 2 | Never worse than Moderate, 60% of the time Good |
+| `rare_excellent_3` | 3 | Mostly Poor or Moderate, with rare but long Excellent openings |
 
 ![Example waterfall curves](doc/markov_states_snr_curves.png)
 
-The figure plots a family of four example parameterisations; the shipped example instantiates the lower three. Details, including how to supply your own, are in [doc/USAGE.md](doc/USAGE.md#channel-model).
+The figure plots the four curve archetypes the channels are assembled from; each channel directory also carries a diagram of its own chain. `build_channels.py` writes all four from their design parameters, and `generate_channels.py` synthesises random ones for sensitivity work. Details, including how to supply your own, are in [doc/USAGE.md](doc/USAGE.md#channel-model).
 
 ## Schedulers
 
