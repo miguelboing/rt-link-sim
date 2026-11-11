@@ -1,10 +1,12 @@
 #include <iostream>
 #include <algorithm>
+#include <cstddef>
 #include <numeric>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "cats.hpp"
 
@@ -17,6 +19,7 @@ CATS_scheduler::CATS_scheduler(unsigned int frequency,
                                unsigned int fixed_tx_power,
                                bool early_drop,
                                bool urgency_check,
+                               std::optional<ChannelModel> model,
                                BufferPacket* buffer,
                                std::shared_ptr<unsigned int> sys_tick):
     BaseScheduler(buffer, sys_tick),
@@ -26,6 +29,8 @@ CATS_scheduler::CATS_scheduler(unsigned int frequency,
     early_drop(early_drop),
     urgency_check(urgency_check),
     belief_threshold(belief_threshold),
+    model(std::move(model)),
+    believed_state(-1),
     periodic_tasks(periodic_tasks),
     horizon_H(0U),
     utilization_threshold(utilization_threshold),
@@ -51,9 +56,16 @@ CATS_scheduler::CATS_scheduler(unsigned int frequency,
         this->max_power_idx = this->fixed_power_idx;
     }
 
-    this->transmission_prob[0] = this->transmission_prob[1] = this->transmission_prob[2] = 0.0;
+    /* Before the first observation there is no state label, so the estimates
+       stand at the model's stationary averages -- the long-run decode
+       probability of each tier. Belief starts at 0, so the first slot is a
+       listen and these are replaced before they size a transmission; they are
+       set so no tier ever reads as flatly impossible, which a zero would. */
+    for (unsigned int i = 0U; i < N_POWERS; i++)
+        this->transmission_prob[i] = this->model.has_value()
+                                     ? this->model->rho_bar(POWER_LEVELS[i])
+                                     : 0.0;
     this->belief = 0.0;
-    this->eigenvalue = BELIEF_DECAY;
 
     /* Horizon = LCM of all task periods. Demand within one hyperperiod is
        exact (every task completes an integer number of releases), so the
@@ -170,7 +182,12 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     else /* If it isn't, try to schedule a packet */
     {
         /* Belief drops */
-        this->belief *= this->eigenvalue;
+        /* One more slot since the last observation. The factor is the A_ss of
+           the state CATS believes the channel is in, so belief is the model
+           probability it has not left that state; 1 - A_ss is the per-slot
+           probability of leaving. Per channel and per state, not one tuned
+           constant for all of them. */
+        this->belief *= belief_decay(this->model, this->believed_state);
 
         /* Find the packet with the earliest deadline */
         auto lowest_it = std::min_element(this->buffer_packet->begin(),
@@ -243,8 +260,36 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
 
 void CATS_scheduler::receive_prediction(const std::vector<double>& pred_probs)
 {
+    /* Only reached for a channel with no estimated model to read a state label
+       in; otherwise receive_state() below is called instead. */
     std::copy(pred_probs.begin(), pred_probs.end(), this->transmission_prob);
+    this->update_power_cap();
+}
 
+void CATS_scheduler::receive_state(int state)
+{
+    /* The predictor returns one label for the slot it observed, and the whole
+       row of per-power estimates is derived from it here, off CATS's own copy
+       of the fitted response curves. All three tiers therefore come from the
+       same state and have the same age -- which is the point: an incorrect
+       label moves power selection, demand and urgency together rather than one
+       of them.
+
+       -1 means the predictor had no label to give (an unknown frequency); keep
+       the estimates as they stand, since the slot is spent either way and the
+       belief reset is what the listen bought. */
+    if (!this->model.has_value() || state < 0) return;
+
+    this->believed_state = state;
+    for (unsigned int i = 0U; i < N_POWERS; i++)
+        this->transmission_prob[i] = this->model->rho(static_cast<std::size_t>(state),
+                                                      POWER_LEVELS[i]);
+
+    this->update_power_cap();
+}
+
+void CATS_scheduler::update_power_cap(void)
+{
     /* Fixed-power mode keeps no adaptive cap at all: max_power_idx was pinned
        to the fixed tier at construction and must not move, or the slack policy
        would creep back into demand/infeasibility/urgency. */
@@ -254,8 +299,8 @@ void CATS_scheduler::receive_prediction(const std::vector<double>& pred_probs)
        first one whose predicted utilization fits below the threshold. If even
        the highest tier doesn't fit (overloaded schedule), fall back to it so
        behavior degrades gracefully. */
-    unsigned int new_cap = 2U;
-    for (unsigned int i = 0U; i < 3U; i++)
+    unsigned int new_cap = N_POWERS - 1U;
+    for (unsigned int i = 0U; i < N_POWERS; i++)
     {
         const double U = this->compute_utilization(this->transmission_prob[i]);
         if (U <= this->utilization_threshold)

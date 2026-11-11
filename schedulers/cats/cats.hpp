@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "schedulers/base_scheduler.hpp"
@@ -21,8 +22,14 @@
        suppress listening;
      - urgency_check off removes only the urgency term from the listening
        condition, leaving belief, power selection and dropping untouched.
-   The belief update (reset on RX, decay by BELIEF_DECAY on TX) and the cached
-   predictor estimates are identical in every combination. */
+   The belief update (reset on RX, decay by the believed state's A_ss on TX)
+   and the cached predictor estimates are identical in every combination.
+
+   The predictor hands over a model-state label, not probabilities. CATS holds
+   its own copy of the channel's fitted FSMC and reads the whole row
+   rho_hat_{s,.} off it, so one observation refreshes all three power tiers
+   together from the same state -- which is also why a mislabelled state moves
+   the power selection, the demand estimate and the urgency test at once. */
 class CATS_scheduler : public BaseScheduler
 {
 public:
@@ -38,6 +45,7 @@ public:
                    unsigned int fixed_tx_power,
                    bool early_drop,
                    bool urgency_check,
+                   std::optional<ChannelModel> model,
                    BufferPacket* buffer,
                    std::shared_ptr<unsigned int> sys_tick);
 
@@ -62,7 +70,16 @@ public:
 
     float belief;
     float belief_threshold;
-    float eigenvalue;
+
+    /* CATS's own copy of the channel's fitted FSMC: the decay rate for belief
+       and the source of every decode estimate below. Empty for a channel with
+       no model (ReplayChannel), which is the only case still fed
+       probabilities directly. */
+    std::optional<ChannelModel> model;
+
+    /* s_hat: the last state the predictor labelled, or -1 before the first
+       observation. */
+    int believed_state;
 
     double transmission_prob[3];
     std::unordered_map<uint64_t, double> accumulated_prob;
@@ -87,6 +104,11 @@ public:
 
     void receive_prediction(const std::vector<double>& pred_probs) override;
 
+    /* One state label refreshes all three tiers: transmission_prob[i] becomes
+       rho_hat(s, POWER_LEVELS[i]) off this scheduler's own response curves. */
+    void receive_state(int state) override;
+    bool wants_state_prediction() const override { return this->model.has_value(); }
+
     std::vector<unsigned int> get_prediction_powers() const override { return {1, 10, 25}; }
 
     std::string get_name() const override;
@@ -103,5 +125,13 @@ public:
     /* Utilization U = compute_demand_slots(p) / H. Returns +inf if infeasible,
        0.0 when there are no periodic tasks. */
     double compute_utilization(double p) const;
+
+private:
+    /* Slack-aware power cap, recomputed whenever the estimates move: the
+       lowest tier whose predicted U fits under the threshold. Shared by both
+       prediction paths so the cap cannot depend on which one delivered the
+       estimates. No-op in fixed-power mode, where the cap *is* the fixed
+       tier. */
+    void update_power_cap(void);
 };
 
