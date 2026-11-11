@@ -18,9 +18,9 @@
    MPEDF is to MPRM what CHEDF is to CHARM, and it is a standalone class for the
    same reason: the pair is only interpretable while the two differ *solely*
    in dequeue order, so the redundancy rule below is a deliberate copy rather
-   than a shared one. Any change to the accumulated-probability rule, to the
-   absence of an RX slot, or to get_prediction_powers() must be applied to
-   both files. Nothing in the build enforces that.
+   than a shared one. Any change to the accumulated-probability rule or to the
+   absence of an RX slot must be applied to both files. Nothing in the build
+   enforces that.
 
    An MPEDF/CHEDF pair isolates what refreshed channel information adds at
    equal queue discipline; an MPRM/MPEDF pair isolates queue discipline at equal
@@ -46,7 +46,6 @@ public:
     scheduled_frame_t do_schedule_frame(void) override;
 
     /* Ignores predictions, and asks for none -- see MPRM_scheduler. */
-    void receive_prediction(const std::vector<double>& pred_probs) override {}
 
     std::string get_name() const override;
 };

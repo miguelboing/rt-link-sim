@@ -65,7 +65,6 @@ public:
        class default, which is what stops main.cpp routing a prediction here;
        the override below is explicit so the intent is not read as an
        oversight. */
-    void receive_prediction(const std::vector<double>& pred_probs) override {}
 
     std::string get_name() const override;
 };
