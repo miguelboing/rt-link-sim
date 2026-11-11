@@ -7,23 +7,41 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+#include <optional>
+
 #include "system_model/system_model.hpp"
 #include "system_model/buffer_packet/buffer_packet.hpp"
+#include "system_model/channel_model/channel_model.hpp"
 
-/* Per-tick decay of a scheduler's confidence in the channel estimate it last
-   heard. This is the modulus of the FSMC's second-largest eigenvalue -- the
-   rate at which the chain's state distribution forgets where it started -- so
-   belief tracks how stale the estimate actually is rather than how long ago it
-   arrived. For the 20m ring (0.98 self-loop on a 6-state cycle) that modulus
-   is |0.98 + 0.02 e^{i pi/3}| ~ 0.99015.
+/* Fallback per-slot decay of a scheduler's confidence in the estimate it last
+   heard, used only for a channel that has no estimated model to decay by --
+   ReplayChannel, which has no state space and so no self-transition
+   probability. It is the modulus of cyclic_fast_6's second-largest
+   eigenvalue, |0.98 + 0.02 e^{i pi/3}| ~ 0.99015, which is that one chain's
+   forgetting rate and nothing else's.
 
-   Shared by every belief-driven scheduler (CATS, CHARM, CHEDF) so the three
-   cannot drift apart; it was a bare literal inside CATS before CHARM and CHEDF
-   adopted the same policy. It is a property of the *channel*, not of any
-   scheduler, so if the transition matrix ever changes this constant has to be
-   recomputed with it -- nothing in the build checks the two against each
-   other. */
+   A scheduler that *does* hold a model never reads this: it decays belief by
+   the self-transition probability of the state it believes the channel is in
+   (see belief_decay() below), which is the right rate per channel and per
+   state rather than one constant standing in for all of them. This is why the
+   four shipped channels no longer need a constant each. */
 inline constexpr float BELIEF_DECAY = 0.99015f;
+
+/* Per-slot persistence of a held state estimate: the model probability that
+   the channel has not left the state it was last observed in, so confidence
+   after d transmitting slots is p_self(s)^d and the probability of having
+   left is 1 - p_self(s)^d. Falls back to BELIEF_DECAY when there is no model
+   or no observation yet, which is the only case that constant still covers.
+
+   Lives here because CATS, CHARM and CHEDF all decay belief this way and a
+   copy in each of the three is the drift hazard the constant already was. */
+inline float belief_decay(const std::optional<ChannelModel>& model, int believed_state)
+{
+    if (!model.has_value() || believed_state < 0)
+        return BELIEF_DECAY;
+
+    return static_cast<float>(model->p_self(static_cast<std::size_t>(believed_state)));
+}
 
 class BaseScheduler
 {
@@ -49,6 +67,17 @@ virtual std::string get_name() const = 0;
 
     /* Non Pure virtual function */
     virtual void receive_prediction(const std::vector<double>& pred_probs); /* This function handles the channel predictions */
+
+    /* The predictor's output when the scheduler holds an estimated model:
+       s_hat_c(t), a model-state label, or -1 for no usable label. The
+       scheduler derives its own decode estimates from it. */
+    virtual void receive_state(int state);
+
+    /* True when an RX slot should be answered with receive_state() rather than
+       receive_prediction(). A scheduler holding a model says yes; one pointed
+       at a channel with no model (ReplayChannel) has no state space to read a
+       label in and keeps the probability path. */
+    virtual bool wants_state_prediction() const { return false; }
 
     virtual std::vector<unsigned int> get_prediction_powers() const { return {}; } /* Powers (W) the scheduler wants predicted */
 
@@ -77,6 +106,11 @@ inline void BaseScheduler::change_buffer_packet(std::shared_ptr<std::vector<pack
 }
 
 inline void BaseScheduler::receive_prediction(const std::vector<double>& pred_probs)
+{
+    return;
+}
+
+inline void BaseScheduler::receive_state(int state)
 {
     return;
 }
