@@ -9,6 +9,7 @@
 #include <utility>
 #include <algorithm>
 #include <streambuf>
+#include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <stdexcept>
@@ -19,6 +20,7 @@ using json = nlohmann::json;
 /* System Model */
 #include "system_model/system_model.hpp"
 #include "system_model/buffer_packet/buffer_packet.hpp"
+#include "system_model/channel_model/channel_model.hpp"
 #include "system_model/radio_interface/radio_interface.hpp"
 #include "system_model/target_receiver/target_receiver.hpp"
 #include "system_model/ml_predictor/ml_predictor.hpp"
@@ -92,8 +94,12 @@ int main(int argc, char* argv[])
     const bool has_seed   = config["simulation"].contains("seed");
     const uint64_t seed   = has_seed ? config["simulation"]["seed"].get<uint64_t>() : 0;
 
-    /* Initialize channels from config */
+    /* Initialize channels from config. A channel is two data files, and the
+       loaders throw when they disagree with each other or cannot be read --
+       a mis-built channel directory, not a bug -- so report it as a config
+       error rather than letting it abort the process. */
     auto channels = std::make_shared<std::vector<std::unique_ptr<BasePhysicalChannel>>>();
+    try
     {
         size_t ch_idx = 0;
         for (const auto& ch : config["channels"])
@@ -110,13 +116,53 @@ int main(int argc, char* argv[])
                     ch["frequency"], ch["csv_path"].get<std::string>(), system_tick);
                 channels->emplace_back(std::move(rc));
             }
+            else
+            {
+                std::cerr << "ERROR: Unknown channel type: "
+                          << ch["type"].get<std::string>() << std::endl;
+                return -1;
+            }
             ++ch_idx;
         }
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "ERROR: " << e.what() << std::endl;
+        return -1;
     }
 
     /* Initialize scheduler from config */
     const auto& sched_cfg = config["scheduler"];
     const std::string sched_type = sched_cfg["type"];
+
+    auto channel_at = [&channels](unsigned int freq) -> BasePhysicalChannel* {
+        auto it = std::find_if(channels->begin(), channels->end(),
+            [freq](const std::unique_ptr<BasePhysicalChannel>& ch) {
+                return ch->frequency == freq;
+            });
+        return it == channels->end() ? nullptr : it->get();
+    };
+
+    /* The estimated channel model the scheduler reasons with. A scheduler is
+       given a *copy* of the fitted FSMC of the channel it operates on, found
+       by frequency the same way MPRM/MPEDF find theirs -- nothing new in the
+       config. Holding its own copy is what lets the estimated model be
+       perturbed away from the physical one later without the channel noticing;
+       as shipped the two are identical, which is the zero-mismatch reference
+       case.
+
+       Empty when the channel has no model to copy (ReplayChannel, a recorded
+       trace with no state space). Such a scheduler keeps taking decode
+       probabilities from the predictor instead of state labels. */
+    std::optional<ChannelModel> sched_model;
+    if (sched_cfg.contains("frequency"))
+    {
+        if (BasePhysicalChannel* ch = channel_at(sched_cfg["frequency"]))
+        {
+            if (const ChannelModel* m = ch->estimated_model())
+                sched_model = *m;
+        }
+    }
 
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHARM")
@@ -127,6 +173,7 @@ int main(int argc, char* argv[])
             sched_cfg["tx_power"],
             sched_cfg["frequency"],
             sched_cfg["belief_threshold"],
+            sched_model,
             &buffer,
             system_tick
         );
@@ -138,6 +185,7 @@ int main(int argc, char* argv[])
             sched_cfg["tx_power"],
             sched_cfg["frequency"],
             sched_cfg["belief_threshold"],
+            sched_model,
             &buffer,
             system_tick
         );
@@ -156,19 +204,16 @@ int main(int argc, char* argv[])
         const unsigned int sched_tx_power  = sched_cfg["tx_power"];
         const unsigned int sched_frequency = sched_cfg["frequency"];
 
-        auto ch_it = std::find_if(channels->begin(), channels->end(),
-            [sched_frequency](const std::unique_ptr<BasePhysicalChannel>& ch) {
-                return ch->frequency == sched_frequency;
-            });
+        BasePhysicalChannel* sched_channel = channel_at(sched_frequency);
 
-        if (ch_it == channels->end())
+        if (sched_channel == nullptr)
         {
             std::cerr << "ERROR: " << sched_type << " found no channel at frequency "
                       << sched_frequency << std::endl;
             return -1;
         }
 
-        const double mean_prob = (*ch_it)->mean_probability(sched_tx_power);
+        const double mean_prob = sched_channel->mean_probability(sched_tx_power);
 
         /* A non-positive static estimate can never accumulate to a
            reliability target, so every packet would be retransmitted until
@@ -252,6 +297,7 @@ int main(int argc, char* argv[])
                 sched_cfg.value("tx_power", 25U),
                 sched_cfg.value("early_drop", true),
                 sched_cfg.value("urgency_check", true),
+                sched_model,
                 &buffer,
                 system_tick
             );
@@ -278,6 +324,20 @@ int main(int argc, char* argv[])
 
     /* Initialize the ML Predictor */
     const double predict_error = config["simulation"].value("predict_error", 0.0);
+
+    /* predict_error perturbs a predicted decode *probability*, and a scheduler
+       holding an estimated model is handed a state label instead -- there is
+       no probability in that path to perturb. State-prediction error is the
+       confusion matrix E_c and is not implemented yet, so say so rather than
+       let a sweep draw three identical curves and read them as insensitivity
+       to prediction error. */
+    if (predict_error > 0.0 && scheduler->wants_state_prediction())
+        std::cerr << "WARNING: predict_error=" << predict_error
+                  << " has no effect on " << sched_type
+                  << ": it predicts a channel state, and state-prediction"
+                     " error (the confusion matrix) is not implemented."
+                  << std::endl;
+
     MLPredictor ml_predictor(system_tick, channels, predict_error);
     if (has_seed) ml_predictor.seed_rng(seed + 0x300);
     std::vector<double> pred_probs;
@@ -433,25 +493,56 @@ int main(int argc, char* argv[])
                     frame_entry["radio_mode"] = "RX_MODE";
                 }
 
-                pred_probs = ml_predictor.predict_channel_conditions(scheduled_frame.frequency, scheduler->get_prediction_powers());
-
-                if (!summary_only)
+                /* What an RX slot buys depends on what the scheduler can do
+                   with it. Holding an estimated model, it wants the observed
+                   model state and derives the decode probabilities itself from
+                   its own response curves; with no model (a recorded trace,
+                   which has no state space) it still takes the probabilities
+                   ready-made. */
+                if (scheduler->wants_state_prediction())
                 {
-                    std::cout << "Predicted probabilities at frequency " << scheduled_frame.frequency << "Hz:";
-                    for (size_t k = 0; k < scheduler->get_prediction_powers().size(); k++)
-                        std::cout << " " << scheduler->get_prediction_powers()[k] << "W=" << pred_probs[k];
-                    std::cout << std::endl;
+                    const int pred_state =
+                        ml_predictor.predict_channel_state(scheduled_frame.frequency);
+
+                    if (!summary_only)
+                    {
+                        std::cout << "Predicted state at frequency "
+                                  << scheduled_frame.frequency << "Hz: " << pred_state
+                                  << std::endl;
+                    }
+
+                    scheduler->receive_state(pred_state);
+
+                    if (!summary_only)
+                    {
+                        frame_entry["prediction"] = {
+                            {"state",       pred_state},
+                            {"frequency",   scheduled_frame.frequency}
+                        };
+                    }
                 }
-
-                scheduler->receive_prediction(pred_probs);
-
-                if (!summary_only)
+                else
                 {
-                    frame_entry["prediction"] = {
-                        {"powers",      scheduler->get_prediction_powers()},
-                        {"probs",       pred_probs},
-                        {"frequency",   scheduled_frame.frequency}
-                    };
+                    pred_probs = ml_predictor.predict_channel_conditions(scheduled_frame.frequency, scheduler->get_prediction_powers());
+
+                    if (!summary_only)
+                    {
+                        std::cout << "Predicted probabilities at frequency " << scheduled_frame.frequency << "Hz:";
+                        for (size_t k = 0; k < scheduler->get_prediction_powers().size(); k++)
+                            std::cout << " " << scheduler->get_prediction_powers()[k] << "W=" << pred_probs[k];
+                        std::cout << std::endl;
+                    }
+
+                    scheduler->receive_prediction(pred_probs);
+
+                    if (!summary_only)
+                    {
+                        frame_entry["prediction"] = {
+                            {"powers",      scheduler->get_prediction_powers()},
+                            {"probs",       pred_probs},
+                            {"frequency",   scheduled_frame.frequency}
+                        };
+                    }
                 }
 
                 break;
@@ -538,26 +629,28 @@ int main(int argc, char* argv[])
         }
         for (auto& ch : *channels)
         {
-            /* FSMC details are sigmoid-channel specific; other channel types
-               (e.g. ReplayChannel) carry no Markov state. */
-            SigmoidChannel* sc = dynamic_cast<SigmoidChannel*>(ch.get());
-            if (sc && !summary_only)
+            /* FSMC details come from the channel's own fitted model; a channel
+               without one (e.g. ReplayChannel) carries no Markov state. */
+            const ChannelModel* ch_model = ch->estimated_model();
+            const int fsmc_state = ch->get_fsmc_state();
+            if (ch_model != nullptr && fsmc_state >= 0 && !summary_only)
             {
-                int fsmc_state = sc->get_fsmc_state();
-                std::cout << "Frequency: " << sc->frequency << std::endl;
+                const markov_state_t& curve =
+                    ch_model->state_curves()[static_cast<std::size_t>(fsmc_state)];
+                std::cout << "Frequency: " << ch->frequency << std::endl;
                 std::cout << "State: " << fsmc_state << std::endl;
                 std::cout << "Parameters"
-                          << "\nSlope: " << sc->fsmc[fsmc_state].slope
-                          << "\nSNR@50% [dB]: " << sc->fsmc[fsmc_state].snr_50_db
-                          << "\nMax Saturation: " << sc->fsmc[fsmc_state].max_saturation;
+                          << "\nSlope: " << curve.slope
+                          << "\nSNR@50% [dB]: " << curve.snr_50_db
+                          << "\nMax Saturation: " << curve.max_saturation;
                 std::cout << std::endl << std::endl;
 
                 frame_entry["fsmc"].push_back({
-                    {"frequency",       sc->frequency},
+                    {"frequency",       ch->frequency},
                     {"state",           fsmc_state},
-                    {"slope",           sc->fsmc[fsmc_state].slope},
-                    {"snr_50_db",       sc->fsmc[fsmc_state].snr_50_db},
-                    {"max_saturation",  sc->fsmc[fsmc_state].max_saturation}
+                    {"slope",           curve.slope},
+                    {"snr_50_db",       curve.snr_50_db},
+                    {"max_saturation",  curve.max_saturation}
                 });
             }
 
