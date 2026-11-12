@@ -21,8 +21,9 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
                                bool early_drop,
                                bool urgency_check,
                                BufferPacket* buffer,
-                               std::shared_ptr<unsigned int> sys_tick):
-    BaseScheduler(buffer, sys_tick),
+                               std::shared_ptr<unsigned int> sys_tick,
+                               std::vector<channel_estimate_t> channels):
+    BaseScheduler(buffer, sys_tick, std::move(channels)),
     channel(channel),
     adaptive_power(adaptive_power),
     fixed_power_idx(N_POWERS - 1U),

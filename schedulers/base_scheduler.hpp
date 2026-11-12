@@ -58,8 +58,13 @@ struct channel_estimate_t
 class BaseScheduler
 {
 public:
+    /* The channel set is a constructor argument, not something installed
+       afterwards: a scheduler that reasons about the channels needs them to be
+       there before its first slot, and one of them chooses its channel from
+       them during construction. No default, so a scheduler cannot be built
+       without them and then be half-formed. */
     BaseScheduler(BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
-                  std::vector<channel_estimate_t> channels = {});
+                  std::vector<channel_estimate_t> channels);
 
     virtual ~BaseScheduler() = default;
 
@@ -77,14 +82,7 @@ public:
 
     /* ── The channel set ──────────────────────────────────────────────────
 
-       Supplied once, after construction, so adding the set did not have to
-       ripple through the constructor of every scheduler that ignores it.
        Order is the config's order, which is what fixes the channel index. */
-    void set_channels(std::vector<channel_estimate_t> channels)
-    {
-        this->channels = std::move(channels);
-    }
-
     const std::vector<channel_estimate_t>& get_channels() const { return this->channels; }
 
     std::size_t n_channels() const { return this->channels.size(); }
@@ -136,10 +134,10 @@ virtual std::string get_name() const = 0;
     BufferPacket* buffer;
 
 protected:
-    /* C = {0, ..., C-1} in config order. main.cpp populates this for every
-       scheduler and refuses to start if any channel has no fitted model, so a
-       scheduler that reads it always finds every channel here. The ones that
-       do not reason about the channel (EDF, MPEDF) simply never look. */
+    /* C = {0, ..., C-1} in config order, every channel with its fitted model.
+       Supplied at construction and never empty: a channel without a model is
+       rejected before any scheduler is built. A scheduler that does not reason
+       about the channel simply never looks. */
     std::vector<channel_estimate_t> channels;
 
 private:

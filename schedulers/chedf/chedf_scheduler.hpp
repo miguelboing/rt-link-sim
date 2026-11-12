@@ -49,7 +49,8 @@ class CHEDF_scheduler : public BaseScheduler
 {
 public:
     CHEDF_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
-                    BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick);
+                    BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
+                    std::vector<channel_estimate_t> channels);
 
     unsigned int tx_power;
 

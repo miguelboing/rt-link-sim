@@ -46,7 +46,8 @@ public:
                    bool early_drop,
                    bool urgency_check,
                    BufferPacket* buffer,
-                   std::shared_ptr<unsigned int> sys_tick);
+                   std::shared_ptr<unsigned int> sys_tick,
+                   std::vector<channel_estimate_t> channels);
 
     /* c: the one channel this scheduler transmits on. Single-channel for now;
        the choice becomes per-slot once the scheduler reasons over the whole
