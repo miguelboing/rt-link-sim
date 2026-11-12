@@ -3,14 +3,12 @@
 Decision rules that **more than one scheduler shares**, implemented once here
 instead of copied into each.
 
-A scheduler in `schedulers/*/` is a queue discipline plus a set of decisions:
-which packet to send, at what power, on which channel, and when to give up a
-slot to listen instead. Several of those decisions are identical across
-schedulers by design — a CATS ablation is only interpretable while CATS
-differs from the baselines in the one policy being ablated, and CHEDF and CATS
-must listen on exactly the same rule for a gap between them to be about power
-and dropping rather than about refresh timing. Anything in that category
-belongs here.
+A scheduler in `schedulers/*/` is a set of decisions: which packet to send, at
+what power, on which channel, and when to give up a slot to listen instead.
+Several of those decisions are identical across schedulers *by design* — a
+comparison between two schedulers only isolates what it claims to isolate while
+everything else about them is the same rule, not a copy of the same rule.
+Anything in that category belongs here.
 
 ## What belongs here, and what does not
 
@@ -33,22 +31,34 @@ belongs to the simulator as a whole.
 
 ## Why shared and not inherited
 
-Each policy is a small class a scheduler **holds**, not a facility
+A policy here is something a scheduler **holds or calls**, not a facility
 `BaseScheduler` provides. The difference matters: a base-class facility asserts
-that every scheduler works this way, so a scheduler wanting a different rule
-has to opt out of something it never asked for. A held object asserts nothing —
-a scheduler that shares the rule owns one, and a scheduler that does not simply
-does not.
+that every scheduler works this way, so a scheduler wanting a different rule has
+to opt out of something it never asked for. A policy asserts nothing — a
+scheduler that shares the rule uses it, and one that does not simply does not.
 
-That is also why these are not in `schedulers/base_scheduler.hpp`: sharing a
-rule between three schedulers and *building it into all schedulers* are
-different claims, and only the first one is true.
+So sharing a rule between some schedulers and *building it into all schedulers*
+are different claims, and only the first is ever true here.
+
+## Two shapes
+
+Pick by whether the rule remembers anything between slots:
+
+- **Stateful → a small class the scheduler owns as a member**, constructed with
+  it and advanced explicitly. `belief_tracker.hpp` is this shape: the scheduler
+  ticks it once per slot and reads it.
+- **Stateless → a free `inline` function** taking what it needs as arguments.
+  `edf_queue.hpp` is this shape: it reads the queue and answers.
+
+Do not make a stateless rule a class for symmetry's sake; an object with no
+members is a worse interface than a function.
 
 ## Contents
 
 | | |
 |---|---|
-| `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. Held by CHEDF and CATS, which share this listening rule. |
+| `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. |
+| `edf_queue.hpp` | `select_earliest_deadline()` — the queued packet with the earliest absolute deadline, or `nullptr` for an empty queue. Ties break on buffer position, which is release order. |
 
 ## Build
 

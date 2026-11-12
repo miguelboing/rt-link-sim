@@ -16,17 +16,9 @@
    distribution. Belief decaying at the channel's own mixing rate is one
    such rule, and it belongs to the schedulers that chose it.
 
-   Held by *composition*, not inherited, which is the point: CHEDF and CATS
-   each own one because they share this rule, and a scheduler that refreshes on
-   a different rule simply does not own one. Nothing about the channel set
-   presumes this policy exists.
-
-   It lives in its own header rather than being copied into both because the
-   rule is identical in each, and a second copy of the decay is the drift
-   hazard the old global constant was. One definition, two owners -- it was
-   three before the period-ordered schedulers were retired, so the duplication
-   argument is weaker now than it was; the policy-versus-estimate separation
-   below is what carries it.
+   Held by *composition*, not inherited, which is the point: a scheduler that
+   refreshes on this rule owns one, and a scheduler that refreshes on another
+   rule does not. Nothing about the channel set presumes this policy exists.
 
    The rule: belief in channel c is 1 the slot after c was observed and is
    multiplied by A_ss(s_hat_c) on every slot since -- the model probability the
