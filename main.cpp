@@ -204,44 +204,24 @@ int main(int argc, char* argv[])
             sched_channel,
             sched_cfg["belief_threshold"],
             &buffer,
-            system_tick
+            system_tick,
+            std::move(sched_channels)
         );
     }
-    else if (sched_type == "MPEDF")
+    else if (sched_type == "SCS")
     {
-        /* Static-channel scheduler. It sizes its redundancy from the channel's
-           long-run mean decode probability at its transmit power,
+        /* Picks its own channel from the long-run means in the channel set, so
+           it takes no `channel` field. Say so rather than let a config set one
+           and silently have no effect. */
+        if (sched_cfg.contains("channel"))
+            std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
+                         " the `channel` field in the config is ignored." << std::endl;
 
-               rho_bar_j = sum_s pi_s rho_s(SNR(P_j))
-
-           which is computed once, here, rather than delivered as a
-           prediction: MPEDF never enters RX_MODE, so nothing would ever hand
-           it the value at run time. See
-           BasePhysicalChannel::mean_probability(). */
-        const unsigned int sched_tx_power = sched_cfg["tx_power"];
-
-        const double mean_prob =
-            (*channels)[sched_channel]->mean_probability(sched_tx_power);
-
-        /* A non-positive static estimate can never accumulate to a
-           reliability target, so every packet would be retransmitted until
-           its deadline. That is a mis-specified channel rather than a policy
-           choice, so say so instead of silently saturating the link. */
-        if (mean_prob <= 0.0)
-            std::cerr << "WARNING: static mean decode probability at " << sched_tx_power
-                      << "W is " << mean_prob
-                      << " - no packet can reach its reliability target." << std::endl;
-
-        if (!summary_only)
-            std::cout << "Static mean decode probability at " << sched_tx_power << "W: "
-                      << mean_prob << std::endl;
-
-        scheduler = std::make_unique<MPEDF_scheduler>(
-            sched_tx_power,
-            sched_channel,
-            mean_prob,
+        scheduler = std::make_unique<SCS_scheduler>(
+            sched_cfg["tx_power"],
             &buffer,
-            system_tick
+            system_tick,
+            std::move(sched_channels)
         );
     }
     else if (sched_type == "EDF")
@@ -250,7 +230,8 @@ int main(int argc, char* argv[])
             sched_cfg["tx_power"],
             sched_channel,
             &buffer,
-            system_tick
+            system_tick,
+            std::move(sched_channels)
         );
     }
     else if (sched_type == "CATS")
@@ -283,7 +264,8 @@ int main(int argc, char* argv[])
                 sched_cfg.value("early_drop", true),
                 sched_cfg.value("urgency_check", true),
                 &buffer,
-                system_tick
+                system_tick,
+                std::move(sched_channels)
             );
         }
         catch (const std::exception& e)
@@ -297,11 +279,6 @@ int main(int argc, char* argv[])
         std::cerr << "ERROR: Unknown scheduler type: " << sched_type << std::endl;
         return -1;
     }
-
-    /* After construction, so adding the set did not have to ripple through
-       the constructor of every scheduler that ignores it. Given to all of
-       them: the ones that do not reason about the channel never read it. */
-    scheduler->set_channels(std::move(sched_channels));
 
     if (summary_only) scheduler->set_log_enabled(false);
 

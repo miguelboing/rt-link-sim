@@ -310,11 +310,11 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 
 # Which power symbol a scheduler's transmit power is written with: the paper
 # separates the fixed-power baseline (EDF) from the channel-aware ones (CHEDF,
-# MPEDF), which spend their power under an accumulated-probability
+# SCS), which spend their power under an accumulated-probability
 # retransmission rule. Keyed on the label's base name; a roster entry with no
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
-_POWER_SYMBOLS = {"EDF": SYM_PFP, "CHEDF": SYM_PCH, "MPEDF": SYM_PCH}
+_POWER_SYMBOLS = {"EDF": SYM_PFP, "CHEDF": SYM_PCH, "SCS": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
 # results dicts, name the test directories and name the per-scheduler logs, so
@@ -413,30 +413,35 @@ SCENARIOS = [
 BASE_EDF_SCHEDULER     = {"type": "EDF", "tx_power": 10}
 BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 
-# MPEDF — "Mean-Predictor EDF". The MP prefix is the predictor it runs on: a
-# single mean decode probability standing in for the refreshed one CHEDF
-# consults. It is CHEDF's accumulated-probability redundancy rule driven by a
-# *static* estimate of the channel — the long-run mean decode probability at
-# the scheduler's power, rho_bar_j = sum_s pi_s rho_s(SNR(P_j)), averaged over
-# the FSMC's stationary distribution.
+# SCS — "Static Channel Selection". Everything it decides, it decides from the
+# channels' long-run statistics before the first transmission, and never
+# revisits:
 #
-# The C++ side computes rho_bar from the channel at construction, which is why
-# it takes no listening knob at all: a static estimate learns nothing from an
-# RX slot, so MPEDF never listens and spends every slot transmitting or idle.
-# That makes it cheaper in airtime than CHEDF at the same power — an
-# MPEDF/CHEDF gap mixes the value of refreshed channel information with that
-# airtime difference, so read it alongside the energy row rather than on its
-# own. How large that difference is is not fixed, either: CHEDF's listening is
-# belief-driven, so its RX share varies with the channel instead of being
-# 1 slot in rx_period.
+#   - *which channel*: the one with the highest long-run mean decode
+#     probability at its transmit power, then that one for the whole run;
+#   - *how much redundancy*: sized from that channel's mean with the
+#     accumulated-probability rule, so it is deterministic — every instance of
+#     a task is sent the same number of times whatever the channel is doing.
+#
+# The mean is rho_bar_{c,j} = sum_s pi_{c,s} rho_{c,s}(SNR(P_j)), averaged over
+# each channel's own stationary distribution.
+#
+# ⚠️ **It takes no `channel` field.** The choice is the scheduler's, not the
+# config's; the C++ side warns if a config sets one anyway. This is the first
+# scheduler for which `c_sel` is a decision rather than a configured constant.
+#
+# It takes no listening knob either: a static estimate learns nothing from an
+# RX slot, so it never listens and spends every slot transmitting or idle. That
+# makes it cheaper in airtime than a scheduler that gives slots up to listen,
+# so read an energy row against one with that in mind.
 #
 # It occupies the middle of the roster's ladder of channel knowledge:
 #   EDF     — one send per frame, no channel knowledge
-#   MPEDF   — redundancy from the channel's long-run average, never listens
+#   SCS     — channel and redundancy from long-run averages, never listens
 #   CHEDF   — redundancy from a belief-driven refreshed prediction
 #   CATS    — the same listening rule, and picks its power too
-BASE_MPEDF_SCHEDULER     = {"type": "MPEDF", "tx_power": 10}
-BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
+BASE_SCS_SCHEDULER     = {"type": "SCS", "tx_power": 10}
+BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 
 # Fixed-power baselines are run at both power levels CATS can pick from
 # (CATS predicts over {1, 10, 25} W), so a CATS curve can be read against a
@@ -455,7 +460,7 @@ BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
 #
 #   scheduler    listening          power      redundancy                drops early
 #   EDF_10W      none               10 W       none, one send per frame  no
-#   MPEDF_10W    none               10 W       static channel average    no
+#   SCS_10W      none               10 W       static, incl. the channel  no
 #   CHEDF_10W    belief             10 W       refreshed estimate        no
 #   CHEDF_25W    belief             25 W       refreshed estimate        no
 #   CATS         belief + urgency   adaptive   refreshed estimate        yes
@@ -480,7 +485,7 @@ BASE_MPEDF_SCHEDULER_25W = dict(BASE_MPEDF_SCHEDULER, tx_power=25)
 # drawer takes color from enumeration order.
 SCHEDULERS = [
     ("EDF_10W",    BASE_EDF_SCHEDULER),
-    ("MPEDF_10W",  BASE_MPEDF_SCHEDULER),
+    ("SCS_10W",    BASE_SCS_SCHEDULER),
     ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
@@ -544,11 +549,11 @@ CATS_COMPARISON_SCHEDULERS = [
 # at every predict_error level, so the error sweep runs them once and
 # replicates. Keyed on scheduler *type*, not the label, so adding another
 # fixed-power variant needs no change here.
-# MPEDF belongs here too: its decode estimate is computed from the channel
-# before the run and never refreshed, so predict_error cannot reach it. On the
-# error sweep it contributes one flat curve per power, like the fixed-power
-# baseline.
-PREDICTOR_INDEPENDENT_TYPES = {"EDF", "MPEDF"}
+# SCS belongs here too: its decode estimate comes from the channels' fitted
+# statistics before the run and is never refreshed, so predict_error cannot
+# reach it. On the error sweep it contributes one flat curve per power, like
+# the fixed-power baseline.
+PREDICTOR_INDEPENDENT_TYPES = {"EDF", "SCS"}
 
 def is_predictor_independent(scheduler: dict) -> bool:
     return scheduler["type"] in PREDICTOR_INDEPENDENT_TYPES
@@ -1780,7 +1785,7 @@ def run_error_sweep(n_runs: int, n_workers: int) -> dict:
             scen_name = scenario_label(n, c_min, c_max, rr_min, rr_max)
             for U in U_VALUES:
                 for sch_name, scheduler in ERROR_SWEEP_SCHEDULERS:
-                    # Predictor-independent schedulers (EDF, MPEDF) — once.
+                    # Predictor-independent schedulers (EDF, SCS) — once.
                     if is_predictor_independent(scheduler) and err != PREDICT_ERRORS[0]:
                         continue
                     test = {
@@ -1870,7 +1875,7 @@ def _draw_error_sweep_panel(axes, scen_name: str, err_to_sch: dict):
     """Draw one scenario column of the error-sweep figure — one row per
     PANEL_METRICS entry. Color/marker are fixed per scheduler so the curves
     match the other plots; linestyle varies with prediction_error.
-    Predictor-independent schedulers (EDF, MPEDF) are drawn once — CHEDF and
+    Predictor-independent schedulers (EDF, SCS) are drawn once — CHEDF and
     CATS get one curve per error level."""
     colors  = plt.cm.tab10.colors
     markers = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]
