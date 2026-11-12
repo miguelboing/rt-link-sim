@@ -5,26 +5,44 @@
 
 #include "schedulers/base_scheduler.hpp"
 
-/* MPEDF -- "Mean-Predictor EDF". MPRM's policy over an EDF queue: CHARM's
-   accumulated-probability redundancy rule driven by a *static* long-run mean
-   decode probability,
+/* MPEDF -- "Mean-Predictor EDF". CHEDF's accumulated-probability redundancy
+   rule over an EDF queue, driven by a *static* estimate of the channel
+   instead of a refreshed prediction.
+
+   The estimate is the channel's long-run mean decode probability at this
+   scheduler's transmit power,
 
        rho_bar_j = sum_s pi_s rho_s(SNR(P_j)),
 
-   with packets dequeued by earliest deadline rather than shortest period.
-   See schedulers/mprm/mprm_scheduler.hpp for what the estimate is, where it
-   comes from, and why this family exists.
+   with pi the stationary distribution of the channel's FSMC and rho_s the
+   per-state decode curve. It is computed once, before the run starts
+   (main.cpp asks the channel via BasePhysicalChannel::mean_probability()),
+   and never updated. Because the value never moves, the redundancy it buys is
+   the same for every frame of a given task: the rule degenerates to "repeat
+   each frame ceil(log(1 - theta^(1/L)) / log(1 - rho_bar)) times", regardless
+   of the state the channel is actually in.
 
-   MPEDF is to MPRM what CHEDF is to CHARM, and it is a standalone class for the
-   same reason: the pair is only interpretable while the two differ *solely*
-   in dequeue order, so the redundancy rule below is a deliberate copy rather
-   than a shared one. Any change to the accumulated-probability rule or to the
-   absence of an RX slot must be applied to both files. Nothing in the build
-   enforces that.
+   Where it sits: EDF sends each frame once at a fixed power. CHEDF sizes the
+   redundancy from a prediction it refreshes whenever its belief in it decays
+   past a threshold. MPEDF sizes it from average channel quality alone. So an
+   EDF/MPEDF gap is what redundancy-from-the-average buys over no redundancy,
+   and an MPEDF/CHEDF gap is what *refreshed* channel information adds on top
+   of knowing only the channel's long-run quality -- which is the baseline this
+   scheduler exists to provide.
 
-   An MPEDF/CHEDF pair isolates what refreshed channel information adds at
-   equal queue discipline; an MPRM/MPEDF pair isolates queue discipline at equal
-   channel knowledge. */
+   It never enters RX_MODE. A static estimate learns nothing from listening, so
+   unlike CHEDF it spends every slot transmitting or idle, and it has no
+   listening knob at all. This is a deliberate asymmetry and it does mean MPEDF
+   gets more transmit opportunities than CHEDF, so an MPEDF/CHEDF gap mixes the
+   information effect with that airtime difference. Since CHEDF's listening is
+   belief-driven, the size of that difference is not fixed -- it shrinks as the
+   queue gets busier and CHEDF listens less.
+
+   MPRM, the period-ordered half of this pair, is gone: the first paper settled
+   EDF over RM, so the period-ordered arm of every pair was retired and this
+   class is now the sole owner of the rule. (It was previously a verbatim copy
+   of schedulers/mprm/, with a keep-both-in-sync hazard that no longer
+   exists.) */
 class MPEDF_scheduler : public BaseScheduler
 {
 public:
@@ -45,7 +63,7 @@ public:
 
     scheduled_frame_t do_schedule_frame(void) override;
 
-    /* Ignores predictions, and asks for none -- see MPRM_scheduler. */
+    /* Ignores predictions, and asks for none -- see the class comment. */
 
     std::string get_name() const override;
 };

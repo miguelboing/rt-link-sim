@@ -15,13 +15,13 @@ scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
     /* No listening branch at all: this scheduler never listens, so every slot is a
        transmit opportunity. See the class comment. */
 
-    /* Find the packet with the earliest deadline. This is the one line of
-       policy that separates MPEDF from MPRM -- everything below is MPRM's
-       redundancy rule, kept identical on purpose.
+    /* Find the packet with the earliest deadline. Everything below is the
+       accumulated-probability redundancy rule, driven by the static estimate;
+       this comparator is what makes it deadline-ordered.
 
-       Unlike MPRM's period comparator this needs no is_periodic guard: a
-       deadline is well defined for aperiodic packets too, so every buffered
-       packet is rankable and none has to be skipped. */
+       It needs no is_periodic guard, unlike the period comparator the retired
+       MPRM carried: a deadline is well defined for aperiodic packets too, so
+       every buffered packet is rankable and none has to be skipped. */
     auto lowest_it = std::min_element(this->buffer_packet->begin(),
                                       this->buffer_packet->end(),
                                       [](const packet_t& a, const packet_t& b) {
@@ -73,8 +73,6 @@ scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
 
 std::string MPEDF_scheduler::get_name() const {
     /* Power is part of the name so runs at different tx_power don't overwrite
-       each other's scheduled-packet logs. A separate class from MPRM, so this
-       is the easiest line to forget to change when copying -- the pair would
-       then collide on the same log. */
+       each other's scheduled-packet logs. */
     return "MPEDF_" + std::to_string(this->tx_power) + "W";
 }

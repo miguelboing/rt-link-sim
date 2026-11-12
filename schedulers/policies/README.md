@@ -6,10 +6,11 @@ instead of copied into each.
 A scheduler in `schedulers/*/` is a queue discipline plus a set of decisions:
 which packet to send, at what power, on which channel, and when to give up a
 slot to listen instead. Several of those decisions are identical across
-schedulers by design — a CHARM/CHEDF comparison is only interpretable while the
-two differ *solely* in dequeue order, and a CATS ablation only while CATS
-differs from the baselines in the one policy being ablated. Anything in that
-category belongs here.
+schedulers by design — a CATS ablation is only interpretable while CATS
+differs from the baselines in the one policy being ablated, and CHEDF and CATS
+must listen on exactly the same rule for a gap between them to be about power
+and dropping rather than about refresh timing. Anything in that category
+belongs here.
 
 ## What belongs here, and what does not
 
@@ -47,7 +48,7 @@ different claims, and only the first one is true.
 
 | | |
 |---|---|
-| `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. Held by CHARM, CHEDF and CATS, which share this listening rule. |
+| `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. Held by CHEDF and CATS, which share this listening rule. |
 
 ## Build
 

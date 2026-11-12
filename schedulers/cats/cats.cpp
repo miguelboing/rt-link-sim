@@ -36,7 +36,8 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
     /* Fixed-power mode has to name a tier the predictor actually reports, or
        the probability driving its retransmission maths would belong to a
        different power than the one transmitted -- the mismatch that once made
-       a 25 W CHARM decide from the 10 W curve. Resolve it once, loudly. */
+       a 25 W scheduler decide from the 10 W curve. Resolve it once,
+       loudly. */
     if (!this->adaptive_power)
     {
         bool found = false;
@@ -296,7 +297,7 @@ std::string CATS_scheduler::get_name() const
     /* Unchanged for the published configuration, so existing logs and any
        tooling that looks for them keep working. Each ablation gets its own
        name instead, or the variants would overwrite one another's
-       *_scheduled_packets.json the way CHARM/CHEDF once did. */
+       *_scheduled_packets.json the way two same-named runs would. */
     if (this->adaptive_power && this->early_drop && this->urgency_check)
         return "CATS Scheduler";
 

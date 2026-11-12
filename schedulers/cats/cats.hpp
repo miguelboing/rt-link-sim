@@ -73,7 +73,7 @@ public:
     /* Belief in the label last heard on each channel, and the floor below
        which CATS gives up a slot to refresh it. The listening policy is CATS's,
        not the base's: the base holds the estimate, this holds what is made of
-       it. Shared with CHARM and CHEDF by composition -- see
+       it. Shared with CHEDF by composition -- see
        schedulers/policies/belief_tracker.hpp. Neither the state nor the
        model nor the row of decode estimates is a member any more; those are
        the estimate, and they live in the channel set. */

@@ -139,7 +139,7 @@ protected:
     /* C = {0, ..., C-1} in config order. main.cpp populates this for every
        scheduler and refuses to start if any channel has no fitted model, so a
        scheduler that reads it always finds every channel here. The ones that
-       do not reason about the channel (RM, EDF, MPRM, MPEDF) simply never look. */
+       do not reason about the channel (EDF, MPEDF) simply never look. */
     std::vector<channel_estimate_t> channels;
 
 private:

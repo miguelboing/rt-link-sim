@@ -6,23 +6,45 @@
 #include "schedulers/base_scheduler.hpp"
 #include "schedulers/policies/belief_tracker.hpp"
 
-/* CHEDF -- CHARM's channel-aware retransmission/power policy over an EDF
-   queue.
+/* CHEDF -- accumulated-probability retransmission over an EDF queue,
+   listening on CATS's belief rule rather than on a fixed interval.
 
-   Listening is belief-driven, exactly as in CHARM: belief in the last
-   prediction is restored by a listen and decays on every slot after it by the
-   self-transition probability A_ss of the state it believes the channel is in,
-   read off its own copy of the channel's fitted FSMC, and the scheduler
-   listens once it drops below belief_threshold. There is no `rx_period` -- see
-   schedulers/charm/charm_scheduler.hpp for why the fixed interval was
-   replaced and why no urgency guard is applied.
+   This is CHARM's channel-aware retransmission/power policy with packets
+   dequeued by earliest deadline. CHARM itself -- the same policy over a
+   period-ordered queue -- is gone: the first paper settled EDF over RM, so
+   the period-ordered arm of every pair was retired and this class is now the
+   sole owner of the policy. (It was previously a deliberate verbatim copy of
+   schedulers/charm/, with a keep-both-in-sync hazard that no longer exists.)
 
-   Standalone by design: it stands on its own as a scheduler rather than as a
-   parameterisation of CHARM. The consequence is that the retransmission rule
-   below is a deliberate copy of CHARM's, not a shared one -- the CHARM/CHEDF
-   comparison is only meaningful while the two differ solely in dequeue order,
-   so any change to the accumulated-probability rule or the belief-driven
-   listening rule must be applied to both files. */
+   Listening policy. CHARM as published gives up every rx_period-th slot to
+   RX_MODE whatever the channel is doing. That is a fixed-interval stand-in
+   for the question actually being asked -- "is the estimate I am holding
+   still worth anything?" -- so it is replaced here by the belief test CATS
+   uses: belief is restored to 1 by a listen and decays on every slot after
+   that, and the scheduler listens as soon as it falls below
+   belief_threshold. The interval that emerges is the one the channel's own
+   dynamics imply, so it is no longer a parameter to tune: `rx_period` is gone
+   and `belief_threshold` takes its place.
+
+   What it decays by is the scheduler's own model. Holding a copy of the
+   channel's fitted FSMC, it knows the believed state's self-transition
+   probability A_ss, so belief d slots after the observation is A_ss^d -- the
+   model probability the channel has not left that state, with 1 - A_ss the
+   per-slot probability of leaving. That is per channel *and* per state: the
+   same scheduler refreshes after 18 slots in a state the chain holds for 50
+   and after 178 in one it holds for 500.
+
+   Unlike CATS this does *not* carry the `no_urgent_packet` guard -- it
+   listens purely on belief, so a listen can consume a slot a near-deadline
+   packet needed. That is a deliberate simplification: it keeps the one
+   difference from CATS's listening policy at zero, at the cost of being able
+   to miss a deadline that periodic listening would have made.
+
+   Everything else is unchanged from the published rule: single fixed power,
+   and a packet is retired once its accumulated decode probability clears its
+   per-frame requirement. The comparator needs no is_periodic guard -- a
+   deadline is well defined for an aperiodic packet, which is one of the
+   things the period-ordered version had to work around. */
 class CHEDF_scheduler : public BaseScheduler
 {
 public:
@@ -39,7 +61,7 @@ public:
     /* Belief in the label last heard on each channel, and the floor below
        which this scheduler gives up a slot to refresh it. The listening policy
        is this scheduler's, not the base's: the base holds the estimate, this
-       holds what is made of it. Shared with CHARM and CATS by composition --
+       holds what is made of it. Shared with CATS by composition --
        see schedulers/policies/belief_tracker.hpp for why it is a held object
        rather than something the base provides. */
     BeliefTracker belief;

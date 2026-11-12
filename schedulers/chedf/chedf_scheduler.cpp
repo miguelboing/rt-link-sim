@@ -45,13 +45,14 @@ scheduled_frame_t CHEDF_scheduler::do_schedule_frame(void)
     else /* If it is not try to schedule a packet */
     {
 
-        /* Find the packet with the earliest deadline. This is the one line of
-           policy that separates CHEDF from CHARM -- everything below is
-           CHARM's retransmission rule, kept identical on purpose.
+        /* Find the packet with the earliest deadline. Everything below is
+           CHARM's published retransmission rule, unchanged; this comparator is
+           what makes it deadline-ordered.
 
-           Unlike CHARM's period comparator this needs no is_periodic guard: a
-           deadline is well defined for aperiodic packets too, so every
-           buffered packet is rankable and none has to be skipped. */
+           It needs no is_periodic guard, unlike the period comparator the
+           retired CHARM carried: a deadline is well defined for aperiodic
+           packets too, so every buffered packet is rankable and none has to be
+           skipped. */
         auto lowest_it = std::min_element(this->buffer_packet->begin(),
                                           this->buffer_packet->end(),
                                           [](const packet_t& a, const packet_t& b) {
