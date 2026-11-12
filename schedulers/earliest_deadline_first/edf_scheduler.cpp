@@ -1,8 +1,8 @@
 #include <iostream>
-#include <algorithm>
 #include <numeric>
 
 #include "edf_scheduler.hpp"
+#include "schedulers/policies/edf_queue.hpp"
 
 EDF_scheduler::EDF_scheduler(unsigned int tx_power, std::size_t channel, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), channel(channel) {};
 
@@ -12,15 +12,11 @@ scheduled_frame_t EDF_scheduler::do_schedule_frame(void)
     scheduled_frame.transmission_power = this->tx_power;
     scheduled_frame.channel = this->channel;
 
-    /* Find the packet with the earliest deadline */
-    auto lowest_it = std::min_element(this->buffer_packet->begin(),
-                                      this->buffer_packet->end(),
-                                      [](const packet_t& a, const packet_t& b) {
-                                          return a.deadline < b.deadline;
-                                      });
-    if (lowest_it != this->buffer_packet->end())
+    packet_t* next = select_earliest_deadline(*this->buffer_packet);
+
+    if (next != nullptr)
     {
-        scheduled_frame.packet = &(*lowest_it);
+        scheduled_frame.packet = next;
         scheduled_frame.radio_mode = TX_MODE;
     }
     else

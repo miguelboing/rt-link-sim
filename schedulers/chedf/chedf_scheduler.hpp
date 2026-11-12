@@ -61,9 +61,7 @@ public:
     /* Belief in the label last heard on each channel, and the floor below
        which this scheduler gives up a slot to refresh it. The listening policy
        is this scheduler's, not the base's: the base holds the estimate, this
-       holds what is made of it. Shared with CATS by composition --
-       see schedulers/policies/belief_tracker.hpp for why it is a held object
-       rather than something the base provides. */
+       holds what is made of it. */
     BeliefTracker belief;
     float belief_threshold;
     std::unordered_map<uint64_t, double> accumulated_prob;

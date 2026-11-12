@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "cats.hpp"
+#include "schedulers/policies/edf_queue.hpp"
 
 
 CATS_scheduler::CATS_scheduler(std::size_t channel,
@@ -178,19 +179,14 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     }
     else /* If it isn't, try to schedule a packet */
     {
-        /* Find the packet with the earliest deadline */
-        auto lowest_it = std::min_element(this->buffer_packet->begin(),
-                                          this->buffer_packet->end(),
-                                          [](const packet_t& a, const packet_t& b) {
-                                              return a.deadline < b.deadline;
-                                          });
+        packet_t* next = select_earliest_deadline(*this->buffer_packet);
 
-        if (lowest_it != this->buffer_packet->end())
+        if (next != nullptr)
         {
             const unsigned int power_levels[3] = {1, 10, 25};
-            uint64_t key     = packet_key(lowest_it->id, lowest_it->id_count);
-            double req       = std::pow(lowest_it->reliability_req,
-                                        1.0 / lowest_it->frames);
+            uint64_t key     = packet_key(next->id, next->id_count);
+            double req       = std::pow(next->reliability_req,
+                                        1.0 / next->frames);
 
             /* Get or initialise accumulated probability for this packet instance */
             double acc = (accumulated_prob.find(key) != accumulated_prob.end())
@@ -235,7 +231,7 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
                 scheduled_frame.remove_from_buffer = false;
             }
 
-            scheduled_frame.packet     = &(*lowest_it);
+            scheduled_frame.packet     = next;
             scheduled_frame.radio_mode = TX_MODE;
         }
         else

@@ -1,8 +1,8 @@
-#include <algorithm>
 #include <cmath>
 #include <numeric>
 
 #include "mpedf_scheduler.hpp"
+#include "schedulers/policies/edf_queue.hpp"
 
 MPEDF_scheduler::MPEDF_scheduler(unsigned int tx_power, std::size_t channel, double mean_prob, BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick): BaseScheduler(buffer, sys_tick), tx_power(tx_power), channel(channel), mean_prob(mean_prob) {};
 
@@ -15,25 +15,14 @@ scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
     /* No listening branch at all: this scheduler never listens, so every slot is a
        transmit opportunity. See the class comment. */
 
-    /* Find the packet with the earliest deadline. Everything below is the
-       accumulated-probability redundancy rule, driven by the static estimate;
-       this comparator is what makes it deadline-ordered.
+    packet_t* next = select_earliest_deadline(*this->buffer_packet);
 
-       It needs no is_periodic guard, unlike the period comparator the retired
-       MPRM carried: a deadline is well defined for aperiodic packets too, so
-       every buffered packet is rankable and none has to be skipped. */
-    auto lowest_it = std::min_element(this->buffer_packet->begin(),
-                                      this->buffer_packet->end(),
-                                      [](const packet_t& a, const packet_t& b) {
-                                          return a.deadline < b.deadline;
-                                      });
-
-    if (lowest_it != this->buffer_packet->end())
+    if (next != nullptr)
     {
-        scheduled_frame.packet = &(*lowest_it);
+        scheduled_frame.packet = next;
         scheduled_frame.radio_mode = TX_MODE;
 
-        uint64_t key = packet_key(lowest_it->id, lowest_it->id_count);
+        uint64_t key = packet_key(next->id, next->id_count);
 
         /* Check if this frame is being transmitted for the first time */
         if (accumulated_prob.find(key) == accumulated_prob.end())
@@ -49,7 +38,7 @@ scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
 
         /* Check if the prob is high enough to remove this frame from the buffer */
         if (accumulated_prob[key] >=
-            std::pow(lowest_it->reliability_req, 1.0 / lowest_it->frames))
+            std::pow(next->reliability_req, 1.0 / next->frames))
         {
             scheduled_frame.remove_from_buffer = true;
             accumulated_prob.erase(key);
@@ -61,9 +50,8 @@ scheduled_frame_t MPEDF_scheduler::do_schedule_frame(void)
     }
     else
     {
-        /* Empty buffer. CHEDF drops into RX_MODE here to refresh its
-           prediction; a static estimate has nothing to listen for, so the
-           slot idles as it would under EDF. */
+        /* Empty buffer. A static estimate has nothing to listen for, so the
+           slot idles rather than being spent on an RX slot. */
         scheduled_frame.packet = nullptr;
         scheduled_frame.radio_mode = IDLE;
     }

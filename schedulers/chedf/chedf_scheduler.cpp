@@ -1,10 +1,10 @@
 #include <iostream>
-#include <algorithm>
 #include <cstddef>
 #include <numeric>
 #include <utility>
 
 #include "chedf_scheduler.hpp"
+#include "schedulers/policies/edf_queue.hpp"
 
 CHEDF_scheduler::CHEDF_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
                                BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick):
@@ -45,26 +45,14 @@ scheduled_frame_t CHEDF_scheduler::do_schedule_frame(void)
     else /* If it is not try to schedule a packet */
     {
 
-        /* Find the packet with the earliest deadline. Everything below is
-           CHARM's published retransmission rule, unchanged; this comparator is
-           what makes it deadline-ordered.
+        packet_t* next = select_earliest_deadline(*this->buffer_packet);
 
-           It needs no is_periodic guard, unlike the period comparator the
-           retired CHARM carried: a deadline is well defined for aperiodic
-           packets too, so every buffered packet is rankable and none has to be
-           skipped. */
-        auto lowest_it = std::min_element(this->buffer_packet->begin(),
-                                          this->buffer_packet->end(),
-                                          [](const packet_t& a, const packet_t& b) {
-                                              return a.deadline < b.deadline;
-                                          });
-
-        if (lowest_it != this->buffer_packet->end())
+        if (next != nullptr)
         {
-            scheduled_frame.packet = &(*lowest_it);
+            scheduled_frame.packet = next;
             scheduled_frame.radio_mode = TX_MODE;
 
-            uint64_t key = packet_key(lowest_it->id, lowest_it->id_count);
+            uint64_t key = packet_key(next->id, next->id_count);
 
             /* Check if this frame is being transmitted for the first time */
             if (accumulated_prob.find(key) == accumulated_prob.end())
@@ -80,7 +68,7 @@ scheduled_frame_t CHEDF_scheduler::do_schedule_frame(void)
 
             /* Check if the prob is high enough to remove this frame from the buffer */
             if (accumulated_prob[key] >=
-                std::pow(lowest_it->reliability_req, 1.0 / lowest_it->frames))
+                std::pow(next->reliability_req, 1.0 / next->frames))
             {
                 scheduled_frame.remove_from_buffer = true;
                 accumulated_prob.erase(key);
@@ -92,10 +80,9 @@ scheduled_frame_t CHEDF_scheduler::do_schedule_frame(void)
         }
         else
         {
-            /* Nothing to send, so spend the slot listening -- as CATS does on
-               the same fallback. The refresh needs no statement here: the slot
-               is an RX slot, so the observation it returns moves tau_c and
-               belief follows from that. */
+            /* Nothing to send, so spend the slot listening. The refresh needs
+               no statement here: the slot is an RX slot, so the observation it
+               returns is what restores belief. */
             scheduled_frame.packet = nullptr;
             scheduled_frame.radio_mode = RX_MODE;
         }

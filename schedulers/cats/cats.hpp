@@ -73,10 +73,9 @@ public:
     /* Belief in the label last heard on each channel, and the floor below
        which CATS gives up a slot to refresh it. The listening policy is CATS's,
        not the base's: the base holds the estimate, this holds what is made of
-       it. Shared with CHEDF by composition -- see
-       schedulers/policies/belief_tracker.hpp. Neither the state nor the
-       model nor the row of decode estimates is a member any more; those are
-       the estimate, and they live in the channel set. */
+       it. The believed state, the model and the row of decode estimates are
+       not members here -- those are the estimate, and they live in the channel
+       set. */
     BeliefTracker belief;
     float belief_threshold;
     std::unordered_map<uint64_t, double> accumulated_prob;
