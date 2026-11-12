@@ -195,21 +195,10 @@ int main(int argc, char* argv[])
     }
 
     std::unique_ptr<BaseScheduler> scheduler;
-    if (sched_type == "CHARM")
+    if (sched_type == "CHEDF")
     {
         /* belief_threshold, not rx_period: listening is belief-driven, the
            same rule CATS uses. */
-        scheduler = std::make_unique<CHARM_scheduler>(
-            sched_cfg["tx_power"],
-            sched_channel,
-            sched_cfg["belief_threshold"],
-            &buffer,
-            system_tick
-        );
-    }
-    else if (sched_type == "CHEDF")
-    {
-        /* Same parameters as CHARM — it is CHARM's policy over an EDF queue. */
         scheduler = std::make_unique<CHEDF_scheduler>(
             sched_cfg["tx_power"],
             sched_channel,
@@ -218,16 +207,16 @@ int main(int argc, char* argv[])
             system_tick
         );
     }
-    else if (sched_type == "MPRM" || sched_type == "MPEDF")
+    else if (sched_type == "MPEDF")
     {
-        /* Static-channel schedulers. They size their redundancy from the
-           channel's long-run mean decode probability at their transmit power,
+        /* Static-channel scheduler. It sizes its redundancy from the channel's
+           long-run mean decode probability at its transmit power,
 
                rho_bar_j = sum_s pi_s rho_s(SNR(P_j))
 
            which is computed once, here, rather than delivered as a
-           prediction: MPRM/MPEDF never enter RX_MODE, so nothing would ever
-           hand them the value at run time. See
+           prediction: MPEDF never enters RX_MODE, so nothing would ever hand
+           it the value at run time. See
            BasePhysicalChannel::mean_probability(). */
         const unsigned int sched_tx_power = sched_cfg["tx_power"];
 
@@ -247,40 +236,17 @@ int main(int argc, char* argv[])
             std::cout << "Static mean decode probability at " << sched_tx_power << "W: "
                       << mean_prob << std::endl;
 
-        if (sched_type == "MPRM")
-        {
-            scheduler = std::make_unique<MPRM_scheduler>(
-                sched_tx_power,
-                sched_channel,
-                mean_prob,
-                &buffer,
-                system_tick
-            );
-        }
-        else
-        {
-            /* MPRM's policy over an EDF queue -- same parameters. */
-            scheduler = std::make_unique<MPEDF_scheduler>(
-                sched_tx_power,
-                sched_channel,
-                mean_prob,
-                &buffer,
-                system_tick
-            );
-        }
-    }
-    else if (sched_type == "EDF")
-    {
-        scheduler = std::make_unique<EDF_scheduler>(
-            sched_cfg["tx_power"],
+        scheduler = std::make_unique<MPEDF_scheduler>(
+            sched_tx_power,
             sched_channel,
+            mean_prob,
             &buffer,
             system_tick
         );
     }
-    else if (sched_type == "Rate_M")
+    else if (sched_type == "EDF")
     {
-        scheduler = std::make_unique<RM_scheduler>(
+        scheduler = std::make_unique<EDF_scheduler>(
             sched_cfg["tx_power"],
             sched_channel,
             &buffer,

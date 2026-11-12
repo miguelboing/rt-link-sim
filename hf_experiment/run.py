@@ -3,7 +3,7 @@
 Drives the same sweep machinery as `run_simulation.py` (UUniFast + parallel
 worker pool + schedulability/energy plots) but on top of the ReplayChannel,
 which feeds the predictor a fixed 0.38/0.82/0.96 view of 1/10/25 W (consumed
-by CATS and by CHARM at its own tx_power) and replays the per-tick success
+by CATS and by CHEDF at its own tx_power) and replays the per-tick success
 outcomes recorded in frame_success.csv. Both come from a success radius of
 X = 2250 km; see replay_channel.cpp.
 
@@ -86,19 +86,19 @@ rs.BASE_CHANNELS = [{
 #
 # Both rosters mirror run_simulation's, with only the channel rebound (to the
 # replay channel, which is index 0 here as it is there), so curve names and
-# figure layout match across the two experiments.
-# `sweep` carries the 8 of the paper's Simulation 1 (RM / EDF / MPEDF at 10 W,
-# CHARM / CHEDF at both powers, CATS); `error_sweep` carries 7, since each
-# predictor-sensitive scheduler draws one curve per error level.
+# figure layout match across the two experiments. `sweep` carries the paper's
+# Simulation 1 (EDF / MPEDF at 10 W, CHEDF at both powers, CATS);
+# `error_sweep` adds EDF at 25 W, since each predictor-sensitive scheduler
+# draws one curve per error level.
 #
-# A note on MPRM/MPEDF here specifically: their static estimate is whatever the
+# A note on MPEDF here specifically: its static estimate is whatever the
 # channel reports as its long-run mean, and ReplayChannel reports the
 # empirical decode rate of the recorded window. That is very close to the
 # fixed PROB_* view the predictor is shown on this channel, so on the replay
-# experiment MPRM/MPEDF and CHARM/CHEDF are fed almost the same number and the
-# pair mostly isolates the RX-slot airtime rather than the information. The
-# informative comparison for these two is the FSMC sweep in run_simulation,
-# where the live prediction actually moves.
+# experiment MPEDF and CHEDF are fed almost the same number and the pair mostly
+# isolates the RX-slot airtime rather than the information. The informative
+# comparison for these two is the FSMC sweep in run_simulation, where the live
+# prediction actually moves.
 def _sched(cfg: dict) -> dict:
     """A copy of a run_simulation roster config. Channels are addressed by index
     now and the replay channel is index 0 here just as the sigmoid channel is
@@ -107,11 +107,8 @@ def _sched(cfg: dict) -> dict:
     return dict(cfg)
 
 rs.SCHEDULERS = [
-    ("RM_10W",     _sched(rs.BASE_RM_SCHEDULER)),
     ("EDF_10W",    _sched(rs.BASE_EDF_SCHEDULER)),
-    ("MPEDF_10W",   _sched(rs.BASE_MPEDF_SCHEDULER)),
-    ("CHARM_10W",  _sched(rs.BASE_SCHEDULER)),
-    ("CHARM_25W",  _sched(rs.BASE_SCHEDULER_25W)),
+    ("MPEDF_10W",  _sched(rs.BASE_MPEDF_SCHEDULER)),
     ("CHEDF_10W",  _sched(rs.BASE_CHEDF_SCHEDULER)),
     ("CHEDF_25W",  _sched(rs.BASE_CHEDF_SCHEDULER_25W)),
     ("CATS",       {"type": "CATS",
