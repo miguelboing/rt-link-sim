@@ -28,11 +28,11 @@ public:
 
        This is a *static* property of the channel, not a prediction -- it does
        not depend on the tick or the current state, so it is safe to evaluate
-       once at construction. It exists for the schedulers that size their
-       redundancy from average channel quality instead of refreshed channel
-       information (MPRM, MPEDF), which never enter RX_MODE and so are never
-       handed a prediction. Pure virtual on purpose: a new channel has to say
-       what its own long-run average means. */
+       once at construction. It exists for a scheduler that sizes its
+       redundancy from average channel quality rather than from a refreshed
+       estimate, and so never listens and is never handed a prediction. Pure
+       virtual on purpose: a new channel has to say what its own long-run
+       average means. */
     virtual double mean_probability(unsigned int transmission_power) = 0;
 
     /* Per-tick FSMC step. Default no-op for channels without internal state. */

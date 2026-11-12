@@ -19,10 +19,10 @@ typedef struct
 }
 packet_t;
 
-/* Globally-unique key for a packet release. id_count is per-id, so schedulers
-   that key per-release state (CATS, CHARM accumulated_prob) must combine both
-   to avoid cross-task collisions when two tasks happen to share a release
-   number. id occupies the high 32 bits, id_count the low 32. */
+/* Globally-unique key for a packet release. id_count is per-id, so anything
+   keying state per release has to combine both, or two tasks that happen to
+   share a release number collide. id occupies the high 32 bits, id_count the
+   low 32. */
 inline uint64_t packet_key(unsigned int id, unsigned int id_count)
 {
     return (static_cast<uint64_t>(id) << 32) | static_cast<uint64_t>(id_count);
