@@ -269,11 +269,16 @@ BASE_CATS_SCHEDULER = {
 # everywhere else by its *index* — its position in this list, which is the
 # paper's c. A scheduler config may carry `"channel": c` to pick one; omitted,
 # it is 0, which is the only choice while this list holds one entry.
+# All four shipped channels, so a scheduler that selects has something to
+# select between. With one channel SCS and CHEDF "pick the best of one", BCS
+# has nothing to choose and collapses into CHEDF, and Jain's index degenerates
+# to 1.00 for everyone (C=1), which reads as "perfectly even" when it means
+# "there was no choice".
 BASE_CHANNELS = [
-    {
-        "type": "sigmoid",
-        "name": "cyclic_fast_6"
-    }
+    {"type": "sigmoid", "name": "cyclic_fast_6"},
+    {"type": "sigmoid", "name": "cyclic_slow_8"},
+    {"type": "sigmoid", "name": "good_moderate_2"},
+    {"type": "sigmoid", "name": "rare_excellent_3"},
 ]
 
 BASE_SIM = {

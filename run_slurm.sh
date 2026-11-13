@@ -29,9 +29,21 @@
 #                      same as sweep at the same n_runs and duration.
 #
 # Wall time is per *scheduler-point*, not per channel: declaring more channels
-# in BASE_CHANNELS costs four model loads per sim and nothing else, so the
+# in BASE_CHANNELS costs a few model loads per sim and nothing else, so the
 # multi-channel roster does not change these numbers. BCS does give up ~19% of
 # its slots to listening, which if anything makes its sims slightly cheaper.
+#
+# Measured data point, for scaling rather than for trusting directly: the full
+# sweep grid at the shipped 250k-tick duration ran 180 sims (3 scen x 10 U x
+# 6 sch x 1 run) in 10.1 s wall on 8 workers of a dev box -- about 0.45 CPU-s
+# per sim. That gives
+#
+#     wall ~= 0.45 s * (3 * 10 * len(SCHEDULERS) * n_runs) / cpus
+#
+# so n_runs=200 is ~8 min and n_runs=500 ~21 min on 32 CPUs. The estimates
+# above are far more conservative because they came from the cluster, whose
+# cores are slower than a desktop's; keep requesting the generous --time and
+# treat this formula as a lower bound, not a budget.
 # Sweep / error_sweep modes keep the worker memory footprint at tens of MB
 # (no full log parsed in Python). Tests mode parses ~180 MB JSON per worker
 # — if running tests with n_runs > 16 on this 32-CPU layout, raise
