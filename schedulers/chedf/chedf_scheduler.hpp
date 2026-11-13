@@ -48,15 +48,17 @@
 class CHEDF_scheduler : public BaseScheduler
 {
 public:
-    CHEDF_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
+    CHEDF_scheduler(unsigned int tx_power, float belief_threshold,
                     BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                     std::vector<channel_estimate_t> channels);
 
     unsigned int tx_power;
 
-    /* c: the one channel this scheduler transmits on. Single-channel for now;
-       the choice becomes per-slot once the scheduler reasons over the whole
-       channel set. */
+    /* c: the channel this scheduler commits to, chosen at construction from
+       the fitted long-run means and never revisited. It refreshes its estimate
+       of that one channel by listening, but never moves to another: holding
+       the channel fixed is what makes a comparison against a scheduler that
+       re-chooses per slot measure the re-choosing and nothing else. */
     std::size_t channel;
 
     /* Belief in the label last heard on each channel, and the floor below

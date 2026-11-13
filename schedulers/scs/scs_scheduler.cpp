@@ -3,6 +3,7 @@
 #include <numeric>
 
 #include "scs_scheduler.hpp"
+#include "schedulers/policies/channel_choice.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 
 SCS_scheduler::SCS_scheduler(unsigned int tx_power, BufferPacket* buffer,
@@ -15,27 +16,13 @@ SCS_scheduler::SCS_scheduler(unsigned int tx_power, BufferPacket* buffer,
 
 void SCS_scheduler::select_channel(void)
 {
-    double best = -1.0;
-
-    for (std::size_t c = 0; c < this->n_channels(); c++)
-    {
-        /* With no observation recorded, rho_hat is the channel's fitted
-           stationary mean -- which is the whole estimate this scheduler ever
-           has, since it never listens. */
-        const double mean = this->rho_hat(c, this->tx_power);
-
-        if (mean > best)
-        {
-            best = mean;
-            this->selected = c;
-        }
-    }
+    this->selected = best_mean_channel(this->get_channels(), this->tx_power);
 
     /* A non-positive best mean can never accumulate to a reliability target,
        so every packet would be retransmitted until its deadline. That is a
        mis-specified set of channels rather than a policy choice, so say so
        instead of silently saturating the link. */
-    if (best <= 0.0)
+    if (this->rho_hat(this->selected, this->tx_power) <= 0.0)
         std::cerr << "WARNING: no channel has a positive mean decode probability at "
                   << this->tx_power << "W - no packet can reach its reliability"
                      " target." << std::endl;

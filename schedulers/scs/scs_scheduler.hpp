@@ -60,13 +60,10 @@ public:
     std::size_t channel(void) const { return this->selected; }
 
 private:
-    /* Pick the channel with the highest long-run mean at tx_power. Called from
-       the constructor: the channel set is a constructor argument, so there is
-       nothing to wait for, and the scheduler is never in a state where it has
-       not chosen.
-
-       Ties go to the lowest index. That is reachable with the shipped
-       channels, since two built from the same curve mix have the same mean. */
+    /* Pick the channel to commit to, and complain if even the best of them
+       cannot carry a packet. Called from the constructor: the channel set is a
+       constructor argument, so there is nothing to wait for and the scheduler
+       is never in a state where it has not chosen. */
     void select_channel(void);
 
     std::size_t selected = 0U;

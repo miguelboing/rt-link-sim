@@ -4,13 +4,17 @@
 #include <utility>
 
 #include "chedf_scheduler.hpp"
+#include "schedulers/policies/channel_choice.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 
-CHEDF_scheduler::CHEDF_scheduler(unsigned int tx_power, std::size_t channel, float belief_threshold,
+CHEDF_scheduler::CHEDF_scheduler(unsigned int tx_power, float belief_threshold,
                                BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                                std::vector<channel_estimate_t> channels):
-    BaseScheduler(buffer, sys_tick, std::move(channels)), tx_power(tx_power), channel(channel),
-    belief_threshold(belief_threshold) {};
+    BaseScheduler(buffer, sys_tick, std::move(channels)), tx_power(tx_power),
+    belief_threshold(belief_threshold)
+{
+    this->channel = best_mean_channel(this->get_channels(), this->tx_power);
+};
 
 scheduled_frame_t CHEDF_scheduler::do_schedule_frame(void)
 {
