@@ -321,6 +321,13 @@ int main(int argc, char* argv[])
     std::set<std::tuple<int,int,int>> received_slots;
     double total_tx_power = 0.0;
 
+    /* Radio occupancy per channel, counted from what the scheduler decided
+       rather than from what the transmitter managed: a slot committed to a
+       channel is spent on it whether or not a frame went out. IDLE slots are
+       not counted against any channel -- the radio is off, not somewhere. */
+    std::vector<unsigned long> channel_tx_slots(channels->size(), 0UL);
+    std::vector<unsigned long> channel_rx_slots(channels->size(), 0UL);
+
     for (unsigned int i = 0U; i < duration; i++)
     {
         for (auto& gen : packet_gens)
@@ -360,6 +367,14 @@ int main(int argc, char* argv[])
         }
 
         scheduled_frame = scheduler->schedule_frame();
+
+        if (scheduled_frame.channel < channels->size())
+        {
+            if (scheduled_frame.radio_mode == TX_MODE)
+                channel_tx_slots[scheduled_frame.channel]++;
+            else if (scheduled_frame.radio_mode == RX_MODE)
+                channel_rx_slots[scheduled_frame.channel]++;
+        }
 
         if (!summary_only) std::cout << "Radio is in ";
 
@@ -658,6 +673,19 @@ int main(int argc, char* argv[])
 
         json summary;
         summary["total_tx_power"] = total_tx_power;
+
+        /* Radio occupancy per channel, in slots, in channel order. Each entry
+           carries the channel's name so a reader does not have to re-derive it
+           from the config, and TX and RX separately so "used for data" and
+           "used for listening" can be told apart. */
+        json channel_slots = json::array();
+        for (std::size_t c = 0; c < channels->size(); c++)
+            channel_slots.push_back({
+                {"name", (*channels)[c]->name},
+                {"tx",   channel_tx_slots[c]},
+                {"rx",   channel_rx_slots[c]}
+            });
+        summary["channel_slots"] = channel_slots;
         summary["window_k"]       = window_k;
         json per_id = json::array();
         for (const auto& kv : per_id_req)

@@ -17,6 +17,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 TESTS_DIR = "tests"
 
@@ -1273,6 +1274,48 @@ def warn_window_k(scenarios: list) -> None:
               f"— m == k, so those tasks are held to zero misses. "
               f"Use window_k >= {floor_k} (WINDOW_K env var).")
 
+def jain_index(allocations: list) -> float:
+    """Jain's fairness index over non-negative allocations:
+
+        J(x) = (sum_i x_i)^2 / (n * sum_i x_i^2)
+
+    1.0 when every entry is equal and 1/n when one entry has everything, so on
+    channel slot counts it reads as *how evenly the radio spread itself*: a
+    scheduler that commits to one channel sits at the 1/n floor by
+    construction, and only one that moves between channels rises above it.
+    Scale-free, so it does not matter that a longer run has more slots.
+
+    Returns 0.0 when nothing was allocated at all — deliberately outside
+    [1/n, 1], because that means the radio never transmitted or listened, not
+    that it was unfair.
+    """
+    n = len(allocations)
+    if n == 0:
+        return 0.0
+
+    total  = sum(allocations)
+    sum_sq = sum(v * v for v in allocations)
+    return (total * total) / (n * sum_sq) if sum_sq > 0 else 0.0
+
+def _channel_usage(summary: dict) -> dict:
+    """Per-channel radio occupancy from a C++ summary block: the share of
+    committed slots each channel took, and Jain's index over them.
+
+    TX and RX are summed: both are the radio sitting on that channel, which is
+    what "how much is this channel used" asks. The split is in the summary if
+    it is ever wanted separately. IDLE slots belong to no channel and are not
+    in the denominator, so the shares answer "of the slots it used, where" and
+    not "how busy was it" — that is what the energy row is for."""
+    slots = summary.get("channel_slots", [])
+    used  = [entry["tx"] + entry["rx"] for entry in slots]
+    total = sum(used)
+
+    return {
+        "jain_channel":   jain_index(used),
+        "channel_shares": [u / total for u in used] if total else [0.0] * len(used),
+        "channel_names":  [entry["name"] for entry in slots],
+    }
+
 def extract_sweep_metrics(summary: dict) -> dict:
     """Turn a C++ summary block into the per-run schedulability metrics.
 
@@ -1293,10 +1336,11 @@ def extract_sweep_metrics(summary: dict) -> dict:
     vacuously met — never as a violation. Same for ids the simulator never
     touched (`generated == 0`), which are likewise not failures.
     """
+    usage  = _channel_usage(summary)
     per_id = summary["per_id"]
     if not per_id:
-        return {"sched_ratio": 0.0, "sched_ratio_mk": 0.0,
-                "max_burst": 0.0, "window_violation_rate": 0.0}
+        return dict(usage, sched_ratio=0.0, sched_ratio_mk=0.0, max_burst=0.0,
+                    window_violation_rate=0.0, vacuous_rate=0.0)
 
     met = mk_met = max_burst = vacuous = 0
     tot_windows = tot_violations = 0
@@ -1316,6 +1360,7 @@ def extract_sweep_metrics(summary: dict) -> dict:
         max_burst = max(max_burst, entry.get("max_consecutive_misses", 0))
 
     return {
+        **usage,
         "sched_ratio":           met / len(per_id),
         "sched_ratio_mk":        mk_met / len(per_id),
         "max_burst":             float(max_burst),
@@ -1331,7 +1376,8 @@ def extract_sweep_metrics(summary: dict) -> dict:
 # exist in every dict returned by _run_single_sweep. The bands are kept in the
 # results dict for offline reading only — neither figure plots them any more.
 SWEEP_METRICS = ("sched_ratio", "sched_ratio_mk", "max_burst",
-                 "window_violation_rate", "vacuous_rate", "total_energy")
+                 "window_violation_rate", "vacuous_rate", "total_energy",
+                 "jain_channel")
 
 # Above this share of ids having no complete (m,k) window, sched_ratio_mk is
 # meaningfully inflated by vacuous passes and the run should say so.
@@ -1366,13 +1412,23 @@ def _percentile(xs: list, p: float) -> float:
 
 def aggregate_runs(runs: list) -> dict:
     """Mean + 10/90 band for every metric in SWEEP_METRICS. Shared by
-    run_sweep and run_error_sweep so the two can't drift apart."""
+    run_sweep and run_error_sweep so the two can't drift apart.
+
+    `channel_shares` is the one non-scalar entry and is averaged element-wise
+    instead, with no band: it is a composition, so a percentile per channel
+    would not sum to 1 and could not be stacked."""
     out = {}
     for key in SWEEP_METRICS:
         vals = [r[key] for r in runs]
         out[key]            = sum(vals) / len(vals)
         out[f"{key}_lo"]    = _percentile(vals, 10)
         out[f"{key}_hi"]    = _percentile(vals, 90)
+
+    shares = [r["channel_shares"] for r in runs if r.get("channel_shares")]
+    if shares:
+        out["channel_shares"] = [sum(s[c] for s in shares) / len(shares)
+                                 for c in range(len(shares[0]))]
+        out["channel_names"]  = runs[0].get("channel_names", [])
     return out
 
 def _run_single_sweep(args: tuple) -> dict:
@@ -1630,7 +1686,8 @@ def _grouped_legend_columns(handles, labels, key):
             out_l.append("")
     return out_h, out_l, len(cols)
 
-def _title_and_legend(fig, ax_src, title: str, per_row: int, group_key=None) -> None:
+def _title_and_legend(fig, ax_src, title: str, per_row: int, group_key=None,
+                      handles=None, labels=None) -> None:
     """Lay out a sweep figure: suptitle on top, axes, then one legend for the
     whole figure along the bottom.
 
@@ -1645,8 +1702,13 @@ def _title_and_legend(fig, ax_src, title: str, per_row: int, group_key=None) -> 
 
     `group_key` switches on the grouped column layout described in
     `_grouped_legend_columns`; without it the entries just flow into as many
-    columns as fit."""
-    handles, labels = ax_src.get_legend_handles_labels()
+    columns as fit.
+
+    `handles`/`labels` override what `ax_src` carries, for a figure whose
+    legend keys something the drawn artists do not enumerate -- a composition
+    where no single bar necessarily contains every category."""
+    if handles is None or labels is None:
+        handles, labels = ax_src.get_legend_handles_labels()
     if not handles:
         fig.tight_layout()
         fig.suptitle(title)
@@ -1721,6 +1783,138 @@ def _window_k_suffix() -> str:
     if not any(key == "sched_ratio_mk" for key, _l, _y in PANEL_METRICS):
         return ""
     return f" ({SYM_KWIN}={BASE_SIM.get('window_k', 100)})"
+
+# Minimum share a segment needs before its percentage is written inside it.
+# Selective on purpose: a number on every segment is four or five labels per
+# bar, most of them on slivers, and the bar already carries the magnitude.
+_USAGE_LABEL_FLOOR = 0.12
+
+def plot_channel_usage(results: dict, basename: str = "results_channel_usage",
+                       title: str = None):
+    """Where each scheduler spent its radio slots, one panel per scenario.
+
+    One horizontal bar per scheduler, segmented by channel, so the bar *is* the
+    composition: a single full-width colour means "this scheduler committed to
+    one channel", and a bar in several colours means it moved between them.
+    Jain's index over the same counts is printed at the end of each bar as the
+    one-number summary of that, with its floor (1/C, one channel doing
+    everything) and ceiling (1.0, perfectly even) named in the axis label so
+    the value is readable without knowing the formula.
+
+    Colour identifies the *channel*, in channel order, so a given channel is
+    the same colour in every panel and across schedulers. It deliberately does
+    not follow rank: the widest segment is not always the same hue.
+
+    Shares are averaged over the sweep's U values. Every scheduler that
+    currently ships fixes its channel before the first slot, so that average is
+    exact rather than a smoothing; if a scheduler ever varies its channel with
+    load, this figure should become a stacked area against U instead, and the
+    per-U shares are already in the results dict to draw it from."""
+    scen_names = list(results.keys())
+    n_scen     = len(scen_names)
+    os.makedirs(TESTS_DIR, exist_ok=True)
+
+    if title is None:
+        title = "Channel utilization per scheduler"
+
+    # Roster order, taken from the results rather than from SCHEDULERS so a
+    # roster passed to run_sweep is reflected here too.
+    sch_names = list(next(iter(results.values())).keys())
+
+    # Channel identity comes from the data; every cell of the grid ran the same
+    # channels block, so the first one that carries names speaks for all.
+    ch_names = []
+    for per_sch in results.values():
+        for per_u in per_sch.values():
+            for metrics in per_u.values():
+                if metrics.get("channel_names"):
+                    ch_names = metrics["channel_names"]
+                    break
+            if ch_names:
+                break
+        if ch_names:
+            break
+    n_ch = len(ch_names)
+    if n_ch == 0:
+        print("  [channel usage] no channel_slots in the results — skipping figure")
+        return
+
+    cmap   = plt.get_cmap("tab10" if n_ch <= 10 else "tab20")
+    colors = [cmap(c % cmap.N) for c in range(n_ch)]
+
+    # Built from the channel list, not from the bars: a scheduler that uses one
+    # channel draws one segment, so no row is guaranteed to enumerate them all
+    # and harvesting handles off an axis would legend only what that row used.
+    legend_handles = [Patch(facecolor=colors[c], label=ch_names[c])
+                      for c in range(n_ch)]
+
+    bar_h  = 0.62
+    fig_h  = 1.1 * len(sch_names) + 2.4
+    fig, axes = plt.subplots(1, n_scen, figsize=(6.6 * n_scen, fig_h),
+                             squeeze=False)
+    axes = axes[0]
+
+    for col, scen_name in enumerate(scen_names):
+        ax = axes[col]
+        per_sch = results[scen_name]
+
+        # Top of the panel is the first roster entry, which is the order the
+        # other figures' legends read in.
+        y_pos = list(range(len(sch_names) - 1, -1, -1))
+
+        for y, sch in zip(y_pos, sch_names):
+            per_u  = per_sch[sch]
+            u_vals = sorted(per_u.keys())
+
+            shares = [0.0] * n_ch
+            for c in range(n_ch):
+                vals = [per_u[u]["channel_shares"][c] for u in u_vals
+                        if len(per_u[u].get("channel_shares", [])) > c]
+                shares[c] = sum(vals) / len(vals) if vals else 0.0
+
+            jain = sum(per_u[u]["jain_channel"] for u in u_vals) / len(u_vals)
+
+            left = 0.0
+            for c in range(n_ch):
+                if shares[c] <= 0.0:
+                    continue
+                # Label only on the first row, or the legend repeats the
+                # channel set once per scheduler.
+                ax.barh(y, shares[c], height=bar_h, left=left,
+                        color=colors[c], edgecolor=fig.get_facecolor(),
+                        linewidth=1.4, zorder=3)
+                if shares[c] >= _USAGE_LABEL_FLOOR:
+                    ax.text(left + shares[c] / 2, y, f"{100 * shares[c]:.0f}%",
+                            ha="center", va="center", fontsize="small",
+                            color="white", zorder=4)
+                left += shares[c]
+
+            ax.text(1.02, y, f"$J$={jain:.2f}", ha="left", va="center",
+                    fontsize="small")
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels([scheduler_title(n) for n in sch_names])
+        ax.set_xlim(0.0, 1.20)
+        ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
+        ax.set_xticklabels(["0", "25%", "50%", "75%", "100%"])
+        ax.set_ylim(-0.6, len(sch_names) - 0.4)
+        ax.grid(axis="x")
+        ax.set_xlabel("Share of committed radio slots")
+        ax.set_title(scenario_title(scen_name))
+
+    # The index's scale is stated once, on the figure, rather than repeated
+    # under every panel where it ran out of width.
+    _title_and_legend(fig, axes[0],
+                      f"{title}\n"
+                      f"$J$ = Jain index over those shares "
+                      f"({1.0 / n_ch:.2f} = one channel does everything, "
+                      f"1.00 = perfectly even)",
+                      per_row=max(2, 8 // max(1, n_ch)),
+                      handles=legend_handles,
+                      labels=[h.get_label() for h in legend_handles])
+    out = save_figure(os.path.join(TESTS_DIR, basename))
+    plt.close(fig)
+    print(f"  [channel usage] wrote {out}")
 
 def plot_schedulability(results: dict, basename: str = "results_schedulability",
                         title: str = None):
@@ -2111,6 +2305,7 @@ if __name__ == "__main__":
         warn_window_k(SWEEP_SCENARIOS)
         results = run_sweep(n_runs, n_workers)
         plot_schedulability(results)
+        plot_channel_usage(results)
         print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 
@@ -2120,6 +2315,8 @@ if __name__ == "__main__":
               f"window_k={BASE_SIM.get('window_k', 100)})")
         warn_window_k(SWEEP_SCENARIOS)
         results = run_sweep(n_runs, n_workers, schedulers=CATS_COMPARISON_SCHEDULERS)
+        plot_channel_usage(results, basename="results_cats_comparison_channels",
+                           title="Channel utilization per CATS variant")
         plot_schedulability(results, basename="results_cats_comparison",
                             title=f"CATS policy comparison{_window_k_suffix()}")
         print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
