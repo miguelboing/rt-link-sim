@@ -58,6 +58,7 @@ members is a worse interface than a function.
 | | |
 |---|---|
 | `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. |
+| `channel_choice.hpp` | `best_mean_channel()` — the channel with the highest fitted long-run mean decode probability at a given power. Static: it reads the models, not any observation, so it answers the same way whenever it is asked and is meant to be called once. Ties break on the lowest index. |
 | `edf_queue.hpp` | `select_earliest_deadline()` — the queued packet with the earliest absolute deadline, or `nullptr` for an empty queue. Ties break on buffer position, which is release order. |
 
 ## Build
