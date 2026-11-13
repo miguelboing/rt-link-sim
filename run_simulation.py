@@ -230,11 +230,25 @@ def make_config(test: dict, seed: Optional[int] = None) -> dict:
 #     re-run. Nothing in the roster varies queue discipline now.
 BASE_CHEDF_SCHEDULER = {
     "type": "CHEDF",
-    "tx_power": 10,
+    "tx_power": 5,
     "belief_threshold": 0.7,
 }
 
 BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
+
+# BCS — "Belief-driven Channel Selection". Keeps an estimate of *every*
+# channel and spends each slot on whichever one the estimates say is worth it:
+# it refreshes the least-trusted channel when any has decayed below
+# `belief_threshold`, and otherwise transmits on the channel whose believed
+# state gives the best decode probability, ties going to the higher belief.
+#
+# ⚠️ It takes no `channel` field — the choice is per slot, which is what
+# separates it from every other entry in the roster. It is also the only one
+# whose listening bill grows with the number of channels: there are C estimates
+# to keep fresh and one queue to drain, so the RX share rises with C while the
+# work does not.
+BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7}
+BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
 
 # The three ablation switches are spelled out rather than left to the C++
 # defaults so `experiment_params.json` records what a run actually used. All
@@ -315,7 +329,8 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # retransmission rule. Keyed on the label's base name; a roster entry with no
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
-_POWER_SYMBOLS = {"EDF": SYM_PFP, "CHEDF": SYM_PCH, "SCS": SYM_PCH}
+_POWER_SYMBOLS = {"EDF": SYM_PFP, "CHEDF": SYM_PCH, "SCS": SYM_PCH,
+                  "BCS": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
 # results dicts, name the test directories and name the per-scheduler logs, so
@@ -411,7 +426,7 @@ SCENARIOS = [
     (0.50, 8,  1, 3, 0.50, 0.90),
 ]
 
-BASE_EDF_SCHEDULER     = {"type": "EDF", "tx_power": 10}
+BASE_EDF_SCHEDULER     = {"type": "EDF", "tx_power": 5}
 BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 
 # SCS — "Static Channel Selection". Everything it decides, it decides from the
@@ -441,7 +456,7 @@ BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 #   SCS     — channel and redundancy from long-run averages, never listens
 #   CHEDF   — redundancy from a belief-driven refreshed prediction
 #   CATS    — the same listening rule, and picks its power too
-BASE_SCS_SCHEDULER     = {"type": "SCS", "tx_power": 10}
+BASE_SCS_SCHEDULER     = {"type": "SCS", "tx_power": 5}
 BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 
 # Fixed-power baselines are run at both power levels CATS can pick from
@@ -459,15 +474,30 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 #
 # The roster of the paper's Simulation 1. Read across the four properties:
 #
-#   scheduler    listening          power      redundancy                drops early
-#   EDF_10W      none               10 W       none, one send per frame  no
-#   SCS_10W      none               10 W       static, incl. the channel  no
-#   CHEDF_10W    belief             10 W       refreshed estimate        no
-#   CHEDF_25W    belief             25 W       refreshed estimate        no
-#   CATS         belief + urgency   adaptive   refreshed estimate        yes
+#   scheduler    listening          power      redundancy                channel
+#   EDF_5W       none                5 W       none, one send per frame  config
+#   SCS_5W       none                5 W       static, incl. the channel best mean
+#   CHEDF_5W     belief, one ch      5 W       refreshed estimate        best mean
+#   CHEDF_25W    belief, one ch     25 W       refreshed estimate        best mean
+#   BCS_5W       belief, every ch    5 W       refreshed estimate        per slot
+#   CATS         belief + urgency   adaptive   refreshed estimate        config
+#
+# ⚠️ The CHEDF/BCS pair is the point of this roster. Both are belief-driven and
+# both refresh on the same rule; CHEDF commits to one channel — the best by
+# long-run mean, the same rule SCS uses — while BCS re-chooses every slot. So
+# the gap between them is channel *re*-selection and nothing else, and the
+# gap from SCS is what refreshing the estimate of that one channel buys.
+#
+# EDF and CATS still take their channel from the config (index 0). For EDF that
+# is the definition of its rung: with no channel knowledge it has nothing to
+# choose on. CATS is a genuine asymmetry — it is the only channel-aware entry
+# not choosing its channel, so a CATS/BCS gap mixes power adaptation with
+# channel selection.
 #
 # It is a ladder of channel knowledge: none, the long-run average, a refreshed
-# estimate, and a refreshed estimate with the power chosen from it.
+# estimate of the best channel, refreshed estimates of every channel with the
+# channel re-chosen each slot, and a refreshed estimate with the power chosen
+# from it.
 #
 # "belief" is the shared rule: belief in the last prediction decays at the
 # channel's mixing rate and a listen restores it. CATS additionally refuses to
@@ -485,10 +515,11 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 # Ordered by family, with a family's two power levels adjacent: the panel
 # drawer takes color from enumeration order.
 SCHEDULERS = [
-    ("EDF_10W",    BASE_EDF_SCHEDULER),
-    ("SCS_10W",    BASE_SCS_SCHEDULER),
-    ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
+    ("EDF_5W",     BASE_EDF_SCHEDULER),
+    ("SCS_5W",     BASE_SCS_SCHEDULER),
+    ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
+    ("BCS_5W",     BASE_BCS_SCHEDULER),
     ("CATS",       BASE_CATS_SCHEDULER),
 ]
 
@@ -498,9 +529,9 @@ SCHEDULERS = [
 # powers. EDF ignores the predictor, so it contributes one flat curve
 # regardless of the error axis.
 ERROR_SWEEP_SCHEDULERS = [
-    ("EDF_10W",    BASE_EDF_SCHEDULER),
+    ("EDF_5W",     BASE_EDF_SCHEDULER),
     ("EDF_25W",    BASE_EDF_SCHEDULER_25W),
-    ("CHEDF_10W",  BASE_CHEDF_SCHEDULER),
+    ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("CATS",       BASE_CATS_SCHEDULER),
 ]
@@ -1789,6 +1820,12 @@ def _window_k_suffix() -> str:
 # bar, most of them on slivers, and the bar already carries the magnitude.
 _USAGE_LABEL_FLOOR = 0.12
 
+# Spread in J across the sweep's U values above which the bar's averaged J is
+# printed with its range. A scheduler that fixes its channel has a spread of
+# exactly 0; one that re-chooses per slot does not, and averaging it to a single
+# number would be the figure lying about how much it moved.
+_USAGE_JAIN_SPREAD = 0.05
+
 def plot_channel_usage(results: dict, basename: str = "results_channel_usage",
                        title: str = None):
     """Where each scheduler spent its radio slots, one panel per scenario.
@@ -1872,7 +1909,8 @@ def plot_channel_usage(results: dict, basename: str = "results_channel_usage",
                         if len(per_u[u].get("channel_shares", [])) > c]
                 shares[c] = sum(vals) / len(vals) if vals else 0.0
 
-            jain = sum(per_u[u]["jain_channel"] for u in u_vals) / len(u_vals)
+            jains = [per_u[u]["jain_channel"] for u in u_vals]
+            jain  = sum(jains) / len(jains)
 
             left = 0.0
             for c in range(n_ch):
@@ -1889,12 +1927,17 @@ def plot_channel_usage(results: dict, basename: str = "results_channel_usage",
                             color="white", zorder=4)
                 left += shares[c]
 
-            ax.text(1.02, y, f"$J$={jain:.2f}", ha="left", va="center",
-                    fontsize="small")
+            # The bar is a U-average. Where a scheduler's channel use actually
+            # moves with load that average hides the movement, so the spread is
+            # printed beside it rather than silently smoothed away.
+            spread = max(jains) - min(jains)
+            label  = (f"$J$={jain:.2f}" if spread <= _USAGE_JAIN_SPREAD
+                      else f"$J$={jain:.2f} ({min(jains):.2f}–{max(jains):.2f})")
+            ax.text(1.02, y, label, ha="left", va="center", fontsize="small")
 
         ax.set_yticks(y_pos)
         ax.set_yticklabels([scheduler_title(n) for n in sch_names])
-        ax.set_xlim(0.0, 1.20)
+        ax.set_xlim(0.0, 1.46)
         ax.set_xticks([0.0, 0.25, 0.5, 0.75, 1.0])
         ax.set_xticklabels(["0", "25%", "50%", "75%", "100%"])
         ax.set_ylim(-0.6, len(sch_names) - 0.4)

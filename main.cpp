@@ -197,11 +197,30 @@ int main(int argc, char* argv[])
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHEDF")
     {
-        /* belief_threshold, not rx_period: listening is belief-driven, the
-           same rule CATS uses. */
+        /* Commits to the best channel by long-run mean, so it takes no
+           `channel` field either. belief_threshold, not rx_period: listening
+           is belief-driven. */
+        if (sched_cfg.contains("channel"))
+            std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
+                         " the `channel` field in the config is ignored." << std::endl;
+
         scheduler = std::make_unique<CHEDF_scheduler>(
             sched_cfg["tx_power"],
-            sched_channel,
+            sched_cfg["belief_threshold"],
+            &buffer,
+            system_tick,
+            std::move(sched_channels)
+        );
+    }
+    else if (sched_type == "BCS")
+    {
+        /* Picks a channel per slot, so it takes no `channel` field either. */
+        if (sched_cfg.contains("channel"))
+            std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
+                         " the `channel` field in the config is ignored." << std::endl;
+
+        scheduler = std::make_unique<BCS_scheduler>(
+            sched_cfg["tx_power"],
             sched_cfg["belief_threshold"],
             &buffer,
             system_tick,
