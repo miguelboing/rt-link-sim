@@ -9,24 +9,29 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 # Resource sizing (post -O2 + summary-mode optimization). Wall time is roughly
-# linear in the number of roster entries, so the figures below are the ones
-# measured on the old 5-entry roster scaled to the current rosters: SCHEDULERS
-# holds 8 (RM, EDF, MPEDF at 10 W; CHARM and CHEDF at 10 W and 25 W; CATS) and
-# ERROR_SWEEP_SCHEDULERS holds 7. They are extrapolations, not measurements --
-# re-time a cheap run before committing to a --time on a long job, and rescale
-# again if you add or drop a scheduler.
-#   - sweep       @ 100k ticks, n_runs=2:   ~3 min wall on 32 CPUs
-#   - sweep       @ 100k ticks, n_runs=50:  ~13 min
-#   - sweep       @ 100k ticks, n_runs=500: ~2 h
-#   - error_sweep @ 250k ticks, n_runs=50:  ~60 min  (scales with len(PREDICT_ERRORS)
-#                                                    and duration; EDF and MPEDF are
+# linear in the number of roster entries. SCHEDULERS now holds 6 (EDF, SCS,
+# CHEDF at 5 W; CHEDF at 25 W; BCS at 5 W; CATS) and ERROR_SWEEP_SCHEDULERS 5,
+# down from 8 and 7, so the figures below are the previous ones scaled by 6/8
+# and 5/7. They are extrapolations of an extrapolation -- re-time a cheap run
+# before committing to a --time on a long job, and rescale again if you add or
+# drop a scheduler.
+#   - sweep       @ 100k ticks, n_runs=2:   ~2 min wall on 32 CPUs
+#   - sweep       @ 100k ticks, n_runs=50:  ~10 min
+#   - sweep       @ 100k ticks, n_runs=500: ~1.5 h
+#   - error_sweep @ 250k ticks, n_runs=50:  ~43 min  (scales with len(PREDICT_ERRORS)
+#                                                    and duration; EDF and SCS are
 #                                                    predictor-independent, so they run
 #                                                    once and are replicated across the
 #                                                    error levels rather than re-simulated)
-#   - error_sweep @ 250k ticks, n_runs=500: ~9.5 h  -- exceeds the 5 h default below,
+#   - error_sweep @ 250k ticks, n_runs=500: ~7 h    -- close to the 5 h default below,
 #                                                    submit with --time=12:00:00
 #   - cats_comparison: 7 CATS variants on the sweep's grid, so budget about the
 #                      same as sweep at the same n_runs and duration.
+#
+# Wall time is per *scheduler-point*, not per channel: declaring more channels
+# in BASE_CHANNELS costs four model loads per sim and nothing else, so the
+# multi-channel roster does not change these numbers. BCS does give up ~19% of
+# its slots to listening, which if anything makes its sims slightly cheaper.
 # Sweep / error_sweep modes keep the worker memory footprint at tens of MB
 # (no full log parsed in Python). Tests mode parses ~180 MB JSON per worker
 # — if running tests with n_runs > 16 on this 32-CPU layout, raise
