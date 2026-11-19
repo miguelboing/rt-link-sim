@@ -15,6 +15,14 @@ Anything in that category belongs here.
 **Here:** a decision rule shared by two or more schedulers, with no state that
 belongs to the simulator as a whole.
 
+A rule with one caller today also belongs here if it is a self-contained
+question rather than a scheduler's private bookkeeping, and especially if
+splitting it out removes a trap. `feasibility.hpp` is the case in point: "can
+this packet still make its deadline" is a question any deadline-driven
+scheduler can ask, and because the policy *cannot* remove a packet, the
+split between classifying and dropping is now structural rather than a rule
+someone has to remember.
+
 **Not here:**
 
 - **The channel estimate.** `BaseScheduler`'s channel set — the fitted FSMC
@@ -23,9 +31,14 @@ belongs to the simulator as a whole.
   the paper's §3.2.1. It stays in `schedulers/base_scheduler.hpp` because every
   scheduler that reasons about the channel reads the same estimate, whatever it
   then decides.
-- **A rule only one scheduler uses.** CATS's slack-aware power cap and its
-  early-drop pass live in `schedulers/cats/`. Moving a single-user rule here
-  buys nothing and makes it look shared.
+- **A scheduler's private bookkeeping.** CATS's slack-aware power cap reads its
+  own task-set horizon and moves its own cap, so it stays in
+  `schedulers/cats/`. Lifting something here only to give it one caller and a
+  longer include path buys nothing.
+- **The action, as opposed to the decision.** Dropping a packet is paired with
+  forgetting whatever per-release state the scheduler kept for it, which a
+  policy cannot know about. `feasibility.hpp` says which packets are hopeless;
+  the caller decides whether to remove them.
 - **Something the simulator owns.** The physical channel, the predictor and the
   packet buffer are not scheduler policy.
 
@@ -59,6 +72,7 @@ members is a worse interface than a function.
 |---|---|
 | `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. |
 | `channel_choice.hpp` | `best_mean_channel()` — the channel with the highest fitted long-run mean decode probability at a given power. Static: it reads the models, not any observation, so it answers the same way whenever it is asked and is meant to be called once. Ties break on the lowest index. |
+| `feasibility.hpp` | `retx_count_required()` — transmissions a frame needs to clear its reliability target at a given decode probability — and `classify_feasibility()`, which runs that over the queue and returns the packets that can no longer make their deadline plus whether any has exactly enough slots left. Classifies only; removal is the caller's. |
 | `edf_queue.hpp` | `select_earliest_deadline()` — the queued packet with the earliest absolute deadline, or `nullptr` for an empty queue. Ties break on buffer position, which is release order. |
 
 ## Build
