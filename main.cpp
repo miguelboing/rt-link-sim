@@ -257,6 +257,33 @@ int main(int argc, char* argv[])
             std::move(sched_channels)
         );
     }
+    else if (sched_type == "Rate_M")
+    {
+        scheduler = std::make_unique<RM_scheduler>(
+            sched_cfg["tx_power"],
+            sched_channel,
+            &buffer,
+            system_tick,
+            std::move(sched_channels)
+        );
+    }
+    else if (sched_type == "CHARM")
+    {
+        /* Commits to the best channel by long-run mean, so it takes no
+           `channel` field. belief_threshold, not rx_period: listening is
+           belief-driven. */
+        if (sched_cfg.contains("channel"))
+            std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
+                         " the `channel` field in the config is ignored." << std::endl;
+
+        scheduler = std::make_unique<CHARM_scheduler>(
+            sched_cfg["tx_power"],
+            sched_cfg["belief_threshold"],
+            &buffer,
+            system_tick,
+            std::move(sched_channels)
+        );
+    }
     else if (sched_type == "CATS")
     {
         /* CATS is aware of the periodic task set so it can size demand/U

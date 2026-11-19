@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=gcsv9491@leeds.ac.uk
-#SBATCH --job-name=cats-sweep
-#SBATCH --output=cats-%j.out
-#SBATCH --error=cats-%j.err
+#SBATCH --job-name=rt-link-sim
+#SBATCH --output=rt-link-sim-%j.out
+#SBATCH --error=rt-link-sim-%j.err
 #SBATCH --time=5:00:00
 #SBATCH --mem-per-cpu=1G
 #SBATCH --ntasks=1
@@ -15,18 +15,16 @@
 # and 5/7. They are extrapolations of an extrapolation -- re-time a cheap run
 # before committing to a --time on a long job, and rescale again if you add or
 # drop a scheduler.
-#   - sweep       @ 100k ticks, n_runs=2:   ~2 min wall on 32 CPUs
-#   - sweep       @ 100k ticks, n_runs=50:  ~10 min
-#   - sweep       @ 100k ticks, n_runs=500: ~1.5 h
-#   - error_sweep @ 250k ticks, n_runs=50:  ~43 min  (scales with len(PREDICT_ERRORS)
-#                                                    and duration; EDF and SCS are
-#                                                    predictor-independent, so they run
-#                                                    once and are replicated across the
-#                                                    error levels rather than re-simulated)
-#   - error_sweep @ 250k ticks, n_runs=500: ~7 h    -- close to the 5 h default below,
-#                                                    submit with --time=12:00:00
-#   - cats_comparison: 7 CATS variants on the sweep's grid, so budget about the
-#                      same as sweep at the same n_runs and duration.
+#   - four-channel  @ 100k ticks, n_runs=2:   ~2 min wall on 32 CPUs
+#   - four-channel  @ 100k ticks, n_runs=50:  ~10 min
+#   - four-channel  @ 100k ticks, n_runs=500: ~1.5 h
+#   - single-channel is three cases in one job, so budget roughly three times
+#     the four-channel figure at the same n_runs: its U sweep and its CATS
+#     comparison each cost about one four-channel sweep, and its error sweep
+#     scales with len(PREDICT_ERRORS) on top -- though EDF and SCS are
+#     predictor-independent, so they run once and are replicated across the
+#     error levels rather than re-simulated. At n_runs=500 that lands near 7 h,
+#     past the 5 h default below: submit with --time=12:00:00.
 #
 # Wall time is per *scheduler-point*, not per channel: declaring more channels
 # in BASE_CHANNELS costs a few model loads per sim and nothing else, so the
@@ -44,23 +42,25 @@
 # above are far more conservative because they came from the cluster, whose
 # cores are slower than a desktop's; keep requesting the generous --time and
 # treat this formula as a lower bound, not a budget.
-# Sweep / error_sweep modes keep the worker memory footprint at tens of MB
+# Both experiment modes keep the worker memory footprint at tens of MB
 # (no full log parsed in Python). Tests mode parses ~180 MB JSON per worker
 # — if running tests with n_runs > 16 on this 32-CPU layout, raise
 # --mem-per-cpu to 2G.
 
 # Submit with:
-#     sbatch run_slurm.sh <run_name> [belief_threshold] [utilization_threshold]
+#     sbatch run_slurm.sh [belief_threshold] [utilization_threshold]
+# There is no run name to pass: the harness names its output folder
+# tests/<mode>_<YYYYMMDD-HHMM>, so re-submitting never overwrites a previous
+# run's figures.
 # Override defaults via --export, e.g.:
-#     sbatch --export=N_RUNS=100,MODE=sweep,ALL       run_slurm.sh <run_name> [belief_threshold] [utilization_threshold]
-#     sbatch --export=N_RUNS=200,MODE=error_sweep,ALL run_slurm.sh <run_name>
-#     sbatch --export=N_RUNS=50,MODE=cats_comparison,ALL run_slurm.sh <run_name>
+#     sbatch --export=N_RUNS=200,MODE=four-channel,ALL  run_slurm.sh [belief_threshold] [utilization_threshold]
+#     sbatch --export=N_RUNS=200,MODE=single-channel,ALL run_slurm.sh
 # Reproducible run (same SEED → bit-identical output PNGs):
-#     sbatch --export=SEED=42,ALL run_slurm.sh <run_name>
+#     sbatch --export=SEED=42,ALL run_slurm.sh
 # Override the weakly-hard (m,k) window used by the sched_ratio_mk curve
 # (default 100, which makes m/k reproduce the 2-decimal reliability exactly;
 # must be >= 10 for the 0.9 reliability tasks — see CLAUDE.md):
-#     sbatch --export=WINDOW_K=50,ALL run_slurm.sh <run_name>
+#     sbatch --export=WINDOW_K=50,ALL run_slurm.sh
 
 set -euo pipefail
 
@@ -108,19 +108,22 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-N_RUNS="${N_RUNS:-50}"   # runs averaged per (scenario, U, scheduler) point
-MODE="${MODE:-sweep}"    # tests | sweep | error_sweep | cats_comparison
+N_RUNS="${N_RUNS:-50}"            # runs averaged per (scenario, U, scheduler) point
+MODE="${MODE:-four-channel}"      # single-channel | four-channel | tests
 case "${MODE}" in
-    tests|sweep|error_sweep|cats_comparison) ;;
-    *) echo "ERROR: MODE='${MODE}' is not one of tests|sweep|error_sweep|cats_comparison." >&2
+    single-channel|four-channel|tests) ;;
+    *) echo "ERROR: MODE='${MODE}' is not one of single-channel|four-channel|tests." >&2
+       echo "       sweep, error_sweep and cats_comparison are no longer modes --" >&2
+       echo "       they are the three cases the single-channel mode runs." >&2
        echo "       A typo here used to run the far heavier 'tests' mode instead," >&2
        echo "       which OOM-kills the step at n_runs>16 on --mem-per-cpu=1G." >&2
        exit 1 ;;
 esac
-RUN_NAME="${1:-run-${SLURM_JOB_ID}}"
-BELIEF_THRESHOLD="${2:-}"        # optional; if empty, run_simulation.py uses its default
-UTILIZATION_THRESHOLD="${3:-}"   # optional; if empty, run_simulation.py uses its default
+# No run name: run_simulation.py names its own output folder <mode>_<date-time>,
+# so two submissions can never land in the same directory.
+BELIEF_THRESHOLD="${1:-}"        # optional; if empty, run_simulation.py uses its default
+UTILIZATION_THRESHOLD="${2:-}"   # optional; if empty, run_simulation.py uses its default
 # Note: passing utilization_threshold requires belief_threshold to be set (positional args).
 
-echo "Job ${SLURM_JOB_ID} | ${SLURM_CPUS_PER_TASK} CPUs | mode=${MODE} | n_runs=${N_RUNS} | name=${RUN_NAME} | belief=${BELIEF_THRESHOLD:-default} | util=${UTILIZATION_THRESHOLD:-default}"
-python run_simulation.py "${N_RUNS}" "${MODE}" "${RUN_NAME}" ${BELIEF_THRESHOLD:+"${BELIEF_THRESHOLD}"} ${UTILIZATION_THRESHOLD:+"${UTILIZATION_THRESHOLD}"}
+echo "Job ${SLURM_JOB_ID} | ${SLURM_CPUS_PER_TASK} CPUs | mode=${MODE} | n_runs=${N_RUNS} | belief=${BELIEF_THRESHOLD:-default} | util=${UTILIZATION_THRESHOLD:-default}"
+python run_simulation.py "${N_RUNS}" "${MODE}" ${BELIEF_THRESHOLD:+"${BELIEF_THRESHOLD}"} ${UTILIZATION_THRESHOLD:+"${UTILIZATION_THRESHOLD}"}

@@ -23,7 +23,13 @@ TESTS_DIR = "tests"
 
 # The modes the CLI accepts, checked before anything runs — see the guard in
 # __main__ for why an unknown one must not fall through to `tests`.
-MODES = ("tests", "sweep", "error_sweep", "cats_comparison")
+# Two experiments and one diagnostic. `single-channel` and `four-channel` each
+# run a whole experiment into one folder; `sweep`, `error_sweep` and
+# `cats_comparison` are no longer modes but the *cases* the single-channel mode
+# runs, so a figure can never be drawn from a different channel block than the
+# one its siblings used. `tests` is the full-log diagnostic path and is not a
+# figure, which is why it survives as a mode of its own.
+MODES = ("single-channel", "four-channel", "tests")
 
 # ── Figure style and paper symbols ────────────────────────────────────────────
 #
@@ -236,6 +242,13 @@ BASE_CHEDF_SCHEDULER = {
 
 BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 
+# CHARM — the same accumulated-probability rule and the same belief-driven
+# listening, over a period-ordered queue. The published algorithm, and the
+# period-ordered control for CHEDF: at equal power and equal listening rule the
+# only difference left between the two is the order the queue is served in.
+BASE_CHARM_SCHEDULER     = dict(BASE_CHEDF_SCHEDULER, type="CHARM")
+BASE_CHARM_SCHEDULER_25W = dict(BASE_CHARM_SCHEDULER, tx_power=25)
+
 # BCS — "Belief-driven Channel Selection". Keeps an estimate of *every*
 # channel and spends each slot on whichever one the estimates say is worth it:
 # it refreshes the least-trusted channel when any has decayed below
@@ -252,12 +265,15 @@ BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 # hands those slots back to the queue. What it gives up is the chance that a
 # channel left out would have been the good one at that moment.
 #
-# TCS2/TCS3/BCS are the same type at `n_usable` 2, 3 and all — so the gaps
-# between those three curves are that trade and nothing else. Measured on four
-# channels at 5 W under saturating load: TX 3556 / 3386 / 3240 against RX
-# 444 / 614 / 760, i.e. the best two return about 10% of the run to
-# transmitting. `n_usable=1` reproduces CHEDF exactly, which is why the roster
-# has no TCS1 — CHEDF already is it.
+# TCS2 and BCS are the same type at `n_usable` 2 and all — so the gap between
+# those two curves is that trade and nothing else. Measured on four channels at
+# 5 W under saturating load: TX 3556 against 3240, RX 444 against 760, i.e. the
+# best two return about 10% of the run to transmitting. `n_usable=1` reproduces
+# CHEDF exactly, which is why there is no TCS1 — CHEDF already is it.
+#
+# BASE_TCS3_SCHEDULER is kept but unused: 3 of 4 channels sat between the two
+# curves on every measure, so it added a line without adding a result. Put it
+# back in SCHEDULERS if the middle of that trade ever needs showing.
 BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7}
 BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
 
@@ -288,12 +304,22 @@ BASE_CATS_SCHEDULER = {
 # has nothing to choose and collapses into CHEDF, and Jain's index degenerates
 # to 1.00 for everyone (C=1), which reads as "perfectly even" when it means
 # "there was no choice".
-BASE_CHANNELS = [
+FOUR_CHANNELS = [
     {"type": "sigmoid", "name": "cyclic_fast_6"},
     {"type": "sigmoid", "name": "cyclic_slow_8"},
     {"type": "sigmoid", "name": "good_moderate_2"},
     {"type": "sigmoid", "name": "rare_excellent_3"},
 ]
+
+# C = 1. The channel every result before the multi-channel work was measured
+# on, so the single-channel mode reproduces those figures rather than a new
+# experiment that happens to look like them.
+SINGLE_CHANNEL = [{"type": "sigmoid", "name": "cyclic_fast_6"}]
+
+# The active block. Each mode assigns this before building any test dict, and
+# only ever in the parent process: run_sweep embeds the resolved channels into
+# each test, so the workers never read this global.
+BASE_CHANNELS = FOUR_CHANNELS
 
 BASE_SIM = {
     "duration":      250000,  # Sufficient for this steady state matrix
@@ -348,7 +374,8 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # retransmission rule. Keyed on the label's base name; a roster entry with no
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
-_POWER_SYMBOLS = {"EDF": SYM_PFP, "CHEDF": SYM_PCH, "SCS": SYM_PCH,
+_POWER_SYMBOLS = {"EDF": SYM_PFP, "RM": SYM_PFP,
+                  "CHEDF": SYM_PCH, "CHARM": SYM_PCH, "SCS": SYM_PCH,
                   "BCS": SYM_PCH, "TCS2": SYM_PCH, "TCS3": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
@@ -448,6 +475,13 @@ SCENARIOS = [
 BASE_EDF_SCHEDULER     = {"type": "EDF", "tx_power": 5}
 BASE_EDF_SCHEDULER_25W = dict(BASE_EDF_SCHEDULER, tx_power=25)
 
+# RM — the fixed-priority baseline: rate-monotonic order, one send per frame,
+# no channel knowledge. It exists only as the queue-discipline control against
+# EDF at the same power, which is a settled result; the multi-channel roster
+# does not carry it.
+BASE_RM_SCHEDULER      = {"type": "Rate_M", "tx_power": 5}
+BASE_RM_SCHEDULER_25W  = dict(BASE_RM_SCHEDULER, tx_power=25)
+
 # SCS — "Static Channel Selection". Everything it decides, it decides from the
 # channels' long-run statistics before the first transmission, and never
 # revisits:
@@ -539,9 +573,33 @@ SCHEDULERS = [
     ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
     ("TCS2_5W",    BASE_TCS2_SCHEDULER),
-    ("TCS3_5W",    BASE_TCS3_SCHEDULER),
     ("BCS_5W",     BASE_BCS_SCHEDULER),
     ("CATS",       BASE_CATS_SCHEDULER),
+]
+
+# The roster of the `single-channel` mode's U sweep, on C = 1. It is v1.1's
+# roster with CATS taken out — CATS gets its own case there, and counting it
+# twice would put the same curve on two figures — and with SCS in the place
+# MPEDF held, that being the same scheduler renamed.
+#
+# With one channel the channel-selecting schedulers have nothing to select, so
+# SCS, CHEDF and CHARM all sit on cyclic_fast_6 and the figure is about what it
+# was about in v1.1: queue discipline crossed with channel knowledge. Read it
+# in pairs — RM against EDF for the order, EDF against SCS for redundancy from
+# the average, SCS against CHEDF for a refreshed estimate, and CHARM against
+# CHEDF for the order again at equal channel knowledge.
+#
+# Powers are 5 W / 25 W, not v1.1's 10 W / 25 W, so both modes sit at the same
+# operating point. The shape of the comparison carries over; the absolute
+# numbers do not, and are not comparable with the published v1.1 figures.
+SINGLE_CHANNEL_SCHEDULERS = [
+    ("RM_5W",      BASE_RM_SCHEDULER),
+    ("EDF_5W",     BASE_EDF_SCHEDULER),
+    ("SCS_5W",     BASE_SCS_SCHEDULER),
+    ("CHARM_5W",   BASE_CHARM_SCHEDULER),
+    ("CHARM_25W",  BASE_CHARM_SCHEDULER_25W),
+    ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
+    ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
 ]
 
 # `error_sweep` draws one curve per scheduler *per error level*, so the sweep's
@@ -2239,18 +2297,25 @@ def write_experiment_params(mode: str, n_runs: int, run_name: Optional[str]) -> 
         "master_seed": MASTER_SEED,
         "started_at":  time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "simulation":  BASE_SIM,
-        # The two sweep modes iterate different rosters — dump the one this
-        # run actually used, or the snapshot won't reproduce the figure.
-        "schedulers":  {name: cfg for name, cfg in
-                        (ERROR_SWEEP_SCHEDULERS if mode == "error_sweep"
-                         else CATS_COMPARISON_SCHEDULERS if mode == "cats_comparison"
-                         else SCHEDULERS)},
+        # Each mode iterates different rosters — dump the ones this run
+        # actually used, or the snapshot won't reproduce the figures. The
+        # single-channel mode runs three cases, so it dumps all three rather
+        # than picking one and leaving the other two unrecorded.
+        "schedulers":  (
+            {case: {name: cfg for name, cfg in roster} for case, roster in (
+                ("sweep",           SINGLE_CHANNEL_SCHEDULERS),
+                ("cats_comparison", CATS_COMPARISON_SCHEDULERS),
+                ("error_sweep",     ERROR_SWEEP_SCHEDULERS),
+            )}
+            if mode == "single-channel"
+            else {name: cfg for name, cfg in SCHEDULERS}
+        ),
         "channels":    BASE_CHANNELS,
     }
 
-    # error_sweep drives SWEEP_SCENARIOS too, so it takes this branch — only
-    # `tests` mode runs the fixed-U SCENARIOS list.
-    if mode in ("sweep", "error_sweep", "cats_comparison"):
+    # Both experiments sweep U over SWEEP_SCENARIOS — only `tests` mode runs
+    # the fixed-U SCENARIOS list.
+    if mode in ("single-channel", "four-channel"):
         params["scenarios"] = {
             "SWEEP_SCENARIOS": [
                 {"n": n, "c_min": c_min, "c_max": c_max,
@@ -2259,7 +2324,8 @@ def write_experiment_params(mode: str, n_runs: int, run_name: Optional[str]) -> 
             ],
             "U_VALUES": U_VALUES,
         }
-        if mode == "error_sweep":
+        # Only the single-channel mode runs an error sweep.
+        if mode == "single-channel":
             params["predict_errors"] = PREDICT_ERRORS
     else:
         params["scenarios"] = {
@@ -2308,9 +2374,16 @@ def format_duration(seconds: float) -> str:
 if __name__ == "__main__":
     n_runs                = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     mode                  = sys.argv[2] if len(sys.argv) > 2 else "tests"
-    run_name              = sys.argv[3] if len(sys.argv) > 3 else None
-    belief_threshold      = float(sys.argv[4]) if len(sys.argv) > 4 else None
-    utilization_threshold = float(sys.argv[5]) if len(sys.argv) > 5 else None
+    belief_threshold      = float(sys.argv[3]) if len(sys.argv) > 3 else None
+    utilization_threshold = float(sys.argv[4]) if len(sys.argv) > 4 else None
+
+    # The run names itself: mode plus the wall-clock start, to the minute. No
+    # two runs then share a folder unless they start in the same minute, so a
+    # re-run cannot quietly overwrite the figures of the one before it — which
+    # a fixed name did, and worse, left behind any file the new run did not
+    # happen to rewrite. Minute resolution is enough because a run takes longer
+    # than that; it keeps the name readable and it sorts chronologically.
+    run_name = f"{mode}_{time.strftime('%Y%m%d-%H%M')}"
     n_workers             = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
 
     # Fail fast on a misspelled mode. This used to fall through to `tests`,
@@ -2321,7 +2394,8 @@ if __name__ == "__main__":
     if mode not in MODES:
         sys.exit(f"unknown mode {mode!r} — expected one of {', '.join(MODES)}.\n"
                  f"usage: python run_simulation.py <n_runs> <{'|'.join(MODES)}> "
-                 f"<run_name> [belief_threshold] [utilization_threshold]")
+                 f"[belief_threshold] [utilization_threshold]\n"
+                 f"the output folder names itself <mode>_<YYYYMMDD-HHMM>.")
 
     if belief_threshold is not None:
         # Applies to *every* belief-driven scheduler, not just CATS: CHEDF
@@ -2329,7 +2403,8 @@ if __name__ == "__main__":
         # CHEDF's at the default would silently compare schedulers under
         # different listening policies. The names are printed so the
         # reach of the override is visible in the run header.
-        _rosters = (SCHEDULERS, ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS)
+        _rosters = (SCHEDULERS, SINGLE_CHANNEL_SCHEDULERS,
+                    ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS)
         touched = sorted({name for roster in _rosters
                           for name, cfg in roster if "belief_threshold" in cfg})
         for roster in _rosters:
@@ -2349,12 +2424,19 @@ if __name__ == "__main__":
         print("SEED unset — runs are non-deterministic "
               "(set SEED=<int> env var for reproducibility)")
 
-    if run_name:
-        target = os.path.join(TESTS_DIR, run_name)
-        os.makedirs(target, exist_ok=True)
-        os.chdir(target)
-        TESTS_DIR = "."   # already inside tests/<run_name>, don't nest another tests/
-        print(f"Outputs will be written under: {os.path.abspath('.')}")
+    target = os.path.join(TESTS_DIR, run_name)
+    os.makedirs(target, exist_ok=True)
+    os.chdir(target)
+    TESTS_DIR = "."   # already inside tests/<run_name>, don't nest another tests/
+    print(f"Outputs will be written under: {os.path.abspath('.')}")
+
+    # The channel block is the mode's defining choice, so resolve it before
+    # anything reads it — the snapshot below records it, and every test dict
+    # built later embeds it.
+    if mode == "single-channel":
+        BASE_CHANNELS = SINGLE_CHANNEL
+    elif mode == "four-channel":
+        BASE_CHANNELS = FOUR_CHANNELS
 
     # Snapshot every parameter that affects the run. Called after CLI
     # overrides have mutated BASE_CATS_SCHEDULER, so the dump reflects the
@@ -2363,37 +2445,44 @@ if __name__ == "__main__":
 
     t_start = time.perf_counter()
 
-    if mode == "sweep":
-        print(f"Running schedulability sweep ({n_runs} runs/point, {n_workers} workers, "
-              f"window_k={BASE_SIM.get('window_k', 100)})")
+    if mode == "single-channel":
         warn_window_k(SWEEP_SCENARIOS)
-        results = run_sweep(n_runs, n_workers)
+        print(f"Running single-channel experiment on {BASE_CHANNELS[0]['name']} "
+              f"({n_runs} runs/point, {n_workers} workers, "
+              f"window_k={BASE_SIM.get('window_k', 100)})")
+
+        print(f"\n[1/3] U sweep — {len(SINGLE_CHANNEL_SCHEDULERS)} schedulers")
+        results = run_sweep(n_runs, n_workers, schedulers=SINGLE_CHANNEL_SCHEDULERS)
+        plot_schedulability(results)
+
+        print(f"\n[2/3] CATS policy comparison — "
+              f"{len(CATS_COMPARISON_SCHEDULERS)} variants")
+        cats_results = run_sweep(n_runs, n_workers,
+                                 schedulers=CATS_COMPARISON_SCHEDULERS)
+        plot_schedulability(cats_results, basename="results_cats_comparison",
+                            title=f"CATS policy comparison{_window_k_suffix()}")
+
+        print(f"\n[3/3] Prediction-error sweep — errors={PREDICT_ERRORS}")
+        err_results = run_error_sweep(n_runs, n_workers)
+        plot_error_sweep(err_results)
+
+        # No channel-utilization figure: with one channel every share is 100%
+        # and Jain's index is 1.0 for everyone, which reads as "perfectly even"
+        # when it means there was nothing to choose between.
+        print(f"\nTotal elapsed: {format_duration(time.perf_counter() - t_start)}")
+        sys.exit(0)
+
+    if mode == "four-channel":
+        warn_window_k(SWEEP_SCENARIOS)
+        print(f"Running four-channel experiment on "
+              f"{', '.join(c['name'] for c in BASE_CHANNELS)} "
+              f"({n_runs} runs/point, {n_workers} workers, "
+              f"window_k={BASE_SIM.get('window_k', 100)})")
+
+        results = run_sweep(n_runs, n_workers, schedulers=SCHEDULERS)
         plot_schedulability(results)
         plot_channel_usage(results)
-        print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
-        sys.exit(0)
-
-    if mode == "cats_comparison":
-        print(f"Running CATS policy comparison ({n_runs} runs/point, "
-              f"{n_workers} workers, {len(CATS_COMPARISON_SCHEDULERS)} variants, "
-              f"window_k={BASE_SIM.get('window_k', 100)})")
-        warn_window_k(SWEEP_SCENARIOS)
-        results = run_sweep(n_runs, n_workers, schedulers=CATS_COMPARISON_SCHEDULERS)
-        plot_channel_usage(results, basename="results_cats_comparison_channels",
-                           title="Channel utilization per CATS variant")
-        plot_schedulability(results, basename="results_cats_comparison",
-                            title=f"CATS policy comparison{_window_k_suffix()}")
-        print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
-        sys.exit(0)
-
-    if mode == "error_sweep":
-        print(f"Running prediction-error sweep ({n_runs} runs/point, "
-              f"{n_workers} workers, errors={PREDICT_ERRORS}, "
-              f"window_k={BASE_SIM.get('window_k', 100)})")
-        warn_window_k(SWEEP_SCENARIOS)
-        results = run_error_sweep(n_runs, n_workers)
-        plot_error_sweep(results)
-        print(f"Total elapsed: {format_duration(time.perf_counter() - t_start)}")
+        print(f"\nTotal elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 
     print(f"Running {n_runs} simulation(s) per test ({n_workers} workers)")
