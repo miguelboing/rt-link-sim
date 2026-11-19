@@ -243,12 +243,26 @@ BASE_CHEDF_SCHEDULER_25W = dict(BASE_CHEDF_SCHEDULER, tx_power=25)
 # state gives the best decode probability, ties going to the higher belief.
 #
 # ⚠️ It takes no `channel` field — the choice is per slot, which is what
-# separates it from every other entry in the roster. It is also the only one
-# whose listening bill grows with the number of channels: there are C estimates
-# to keep fresh and one queue to drain, so the RX share rises with C while the
-# work does not.
+# separates it from every other entry in the roster.
+#
+# `n_usable` is how many channels it works with, best long-run mean first;
+# absent or 0 means all of them. Narrowing the set is an optimisation, not a
+# handicap: every channel it works with is an estimate to keep fresh, and every
+# refresh is a slot spent probing rather than transmitting, so a smaller set
+# hands those slots back to the queue. What it gives up is the chance that a
+# channel left out would have been the good one at that moment.
+#
+# TCS2/TCS3/BCS are the same type at `n_usable` 2, 3 and all — so the gaps
+# between those three curves are that trade and nothing else. Measured on four
+# channels at 5 W under saturating load: TX 3556 / 3386 / 3240 against RX
+# 444 / 614 / 760, i.e. the best two return about 10% of the run to
+# transmitting. `n_usable=1` reproduces CHEDF exactly, which is why the roster
+# has no TCS1 — CHEDF already is it.
 BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7}
 BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
+
+BASE_TCS2_SCHEDULER    = dict(BASE_BCS_SCHEDULER, n_usable=2)
+BASE_TCS3_SCHEDULER    = dict(BASE_BCS_SCHEDULER, n_usable=3)
 
 # The three ablation switches are spelled out rather than left to the C++
 # defaults so `experiment_params.json` records what a run actually used. All
@@ -335,7 +349,7 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # entry here falls back to P_FP, so a new fixed-power baseline needs nothing
 # added but a new family does.
 _POWER_SYMBOLS = {"EDF": SYM_PFP, "CHEDF": SYM_PCH, "SCS": SYM_PCH,
-                  "BCS": SYM_PCH}
+                  "BCS": SYM_PCH, "TCS2": SYM_PCH, "TCS3": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
 # results dicts, name the test directories and name the per-scheduler logs, so
@@ -524,6 +538,8 @@ SCHEDULERS = [
     ("SCS_5W",     BASE_SCS_SCHEDULER),
     ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
+    ("TCS2_5W",    BASE_TCS2_SCHEDULER),
+    ("TCS3_5W",    BASE_TCS3_SCHEDULER),
     ("BCS_5W",     BASE_BCS_SCHEDULER),
     ("CATS",       BASE_CATS_SCHEDULER),
 ]

@@ -219,9 +219,13 @@ int main(int argc, char* argv[])
             std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
                          " the `channel` field in the config is ignored." << std::endl;
 
+        /* How many of the channels it works with, best long-run mean first.
+           Absent or 0 means all of them; a smaller number narrows the set, so
+           fewer slots go on probing channels it is unlikely to pick. */
         scheduler = std::make_unique<BCS_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["belief_threshold"],
+            sched_cfg.value("n_usable", std::size_t{0}),
             &buffer,
             system_tick,
             std::move(sched_channels)
