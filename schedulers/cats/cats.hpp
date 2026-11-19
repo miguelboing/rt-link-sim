@@ -106,10 +106,6 @@ public:
 
     std::string get_name() const override;
 
-    /* Minimum number of transmissions per frame to achieve sr_req given a
-       per-attempt success probability p. Returns +inf if p<=0<sr_req. */
-    static double retx_count_required(double p, double sr_req);
-
     /* Demand in slots within the horizon H, given a per-frame success
        probability p. Demand_i = ceil(H/T_i) * C_i * retx_count_required(p, RR_i).
        Returns +inf if any task is infeasible at p. */

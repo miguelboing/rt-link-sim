@@ -10,6 +10,7 @@
 
 #include "cats.hpp"
 #include "schedulers/policies/edf_queue.hpp"
+#include "schedulers/policies/feasibility.hpp"
 
 
 CATS_scheduler::CATS_scheduler(std::size_t channel,
@@ -67,19 +68,6 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
     }
 }
 
-double CATS_scheduler::retx_count_required(double p, double sr_req)
-{
-    /* P(success in k attempts) = 1 - (1-p)^k >= sr_req
-       => k >= log(1 - sr_req) / log(1 - p). */
-    if (sr_req <= 0.0) return 1.0;             /* still need to send the frame once */
-    if (p >= 1.0)      return 1.0;
-    if (p <= 0.0)      return std::numeric_limits<double>::infinity();
-    if (sr_req >= 1.0) return std::numeric_limits<double>::infinity();
-
-    const double k = std::log(1.0 - sr_req) / std::log(1.0 - p);
-    return std::ceil(k);
-}
-
 double CATS_scheduler::compute_demand_slots(double p) const
 {
     if (this->horizon_H == 0U) return 0.0;
@@ -110,6 +98,12 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     scheduled_frame_t scheduled_frame;
     scheduled_frame.channel = this->channel;
 
+    /* Nothing transmitted unless the TX branch below picks a tier and says
+       otherwise. Set here rather than left to that branch because a slot spent
+       listening or idling still carries this field into the per-slot log, and
+       an unset value there is whatever was on the stack. */
+    scheduled_frame.transmission_power = 0U;
+
     /* One slot of belief decay, for every channel. CATS's policy, so CATS
        ticks it -- the base holds the estimate and makes no assumption about
        what is made of it. */
@@ -131,33 +125,18 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
        Pre-prediction (p_best == 0) we fall back to 1 slot/frame so packets
        aren't all dropped before the first prediction lands. */
     const double p_best = this->prob_at(this->max_power_idx);
-    std::vector<std::pair<unsigned int, unsigned int>> infeasible;
-    bool no_urgent_packet = true;
-    for (auto& pkt : *this->buffer_packet)
-    {
-        if (pkt.deadline <= *(this->system_tick)) continue; /* already expired, check_deadlines handles it */
-        const double ticks_available  = static_cast<double>(pkt.deadline - *(this->system_tick));
-        const unsigned int remaining_frames = pkt.frames - pkt.frame_count;
-        const double rr_per_frame = std::pow(pkt.reliability_req, 1.0 / pkt.frames);
-        const double slots_per_frame = (p_best <= 0.0) ? 1.0
-                                                       : retx_count_required(p_best, rr_per_frame);
-        const double needed_slots = static_cast<double>(remaining_frames) * slots_per_frame;
-        if (std::isinf(needed_slots) || ticks_available < needed_slots)
-        {
-            infeasible.emplace_back(pkt.id, pkt.id_count);   /* classified, not yet removed */
-        }
-        else if (ticks_available <= needed_slots)
-        {
-            no_urgent_packet = false;
-        }
-    }
+
+    const feasibility_t feasibility =
+        classify_feasibility(*this->buffer_packet, *(this->system_tick), p_best);
+
+    const bool no_urgent_packet = !feasibility.any_urgent;
 
     /* Removal is the switchable half. With early_drop off the infeasible list
        is simply discarded and those packets run to deadline expiry (or get
        retired by the reliability rule if the channel improves). */
     if (this->early_drop)
     {
-        for (auto& [id, id_count] : infeasible)
+        for (const auto& [id, id_count] : feasibility.infeasible)
         {
             accumulated_prob.erase(packet_key(id, id_count));
             this->buffer->drop_packet(id, id_count);
