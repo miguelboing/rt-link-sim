@@ -1,14 +1,16 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
+#include <numeric>
 #include <vector>
 
 #include "schedulers/base_scheduler.hpp"
 
-/* ── Channel choice: the best long-run mean ──────────────────────────────────
+/* ── Channel choice: ranking by long-run mean ────────────────────────────────
 
-   Which of the available channels to commit to, decided from the fitted models
-   alone and so answerable before a single slot has been observed.
+   Which of the available channels are worth using, decided from the fitted
+   models alone and so answerable before a single slot has been observed.
 
    The ranking is each channel's long-run mean decode probability at the power
    in question,
@@ -27,30 +29,38 @@
    and wants a different function -- this one is only meaningful before
    anything has been heard, or for a scheduler that never listens.
 
-   A free function, because the choice carries no state: it reads the models
-   and answers.
+   Free functions, because the choice carries no state: they read the models
+   and answer.
 
    ⚠️ Ties go to the lowest index, and are reachable rather than theoretical:
    two channels built from the same curve mix have the same mean to the bit.
    Deterministic, so two schedulers using this rule always land on the same
-   channel, which is what makes a comparison between them about what they do
+   channels, which is what makes a comparison between them about what they do
    *after* choosing. */
+
+/* Every channel index, best mean first, worst last. */
+inline std::vector<std::size_t>
+rank_channels_by_mean(const std::vector<channel_estimate_t>& channels,
+                      unsigned int transmission_power)
+{
+    std::vector<std::size_t> order(channels.size());
+    std::iota(order.begin(), order.end(), 0U);
+
+    /* Stable, so equal means keep index order and the tie rule above holds. */
+    std::stable_sort(order.begin(), order.end(),
+        [&channels, transmission_power](std::size_t a, std::size_t b) {
+            return channels[a].model.rho_bar(transmission_power)
+                 > channels[b].model.rho_bar(transmission_power);
+        });
+
+    return order;
+}
+
+/* The single best channel: the head of the ranking. */
 inline std::size_t best_mean_channel(const std::vector<channel_estimate_t>& channels,
                                      unsigned int transmission_power)
 {
-    std::size_t best      = 0U;
-    double      best_mean = -1.0;
+    const std::vector<std::size_t> order = rank_channels_by_mean(channels, transmission_power);
 
-    for (std::size_t c = 0; c < channels.size(); c++)
-    {
-        const double mean = channels[c].model.rho_bar(transmission_power);
-
-        if (mean > best_mean)
-        {
-            best_mean = mean;
-            best      = c;
-        }
-    }
-
-    return best;
+    return order.empty() ? 0U : order.front();
 }
