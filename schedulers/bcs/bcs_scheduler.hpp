@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "schedulers/base_scheduler.hpp"
 #include "schedulers/policies/belief_tracker.hpp"
@@ -45,6 +46,7 @@ class BCS_scheduler : public BaseScheduler
 {
 public:
     BCS_scheduler(unsigned int tx_power, float belief_threshold,
+                  std::size_t n_usable,
                   BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                   std::vector<channel_estimate_t> channels);
 
@@ -54,6 +56,23 @@ public:
        which this scheduler gives up a slot to refresh one. */
     BeliefTracker belief;
     float belief_threshold;
+
+    /* The channels this scheduler is allowed to use, best long-run mean first.
+       Fixed at construction from the fitted models, so *which* channels are in
+       play is a static decision even though which one is used each slot is
+       not.
+
+       The size of this set is the knob the roster's variants differ on, and
+       narrowing it is an optimisation rather than a handicap. Every channel in
+       the set is an estimate to keep fresh, and every refresh is a slot spent
+       probing instead of transmitting; there is only ever one queue to drain,
+       so that bill grows with the size of the set while the work does not.
+       Keeping only the best few hands those slots back to the queue, and what
+       it gives up is the chance that a channel left out would have been the
+       good one at that moment. The variants are the same class running the
+       same rule over a different set, so a gap between them is that trade and
+       nothing else. */
+    std::vector<std::size_t> usable_channels;
 
     std::unordered_map<uint64_t, double> accumulated_prob;
 
