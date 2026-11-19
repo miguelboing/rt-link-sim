@@ -3,20 +3,32 @@
 #include <utility>
 
 #include "bcs_scheduler.hpp"
+#include "schedulers/policies/channel_choice.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 
 BCS_scheduler::BCS_scheduler(unsigned int tx_power, float belief_threshold,
+                             std::size_t n_usable,
                              BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                              std::vector<channel_estimate_t> channels):
     BaseScheduler(buffer, sys_tick, std::move(channels)), tx_power(tx_power),
-    belief_threshold(belief_threshold) {};
+    belief_threshold(belief_threshold)
+{
+    this->usable_channels = rank_channels_by_mean(this->get_channels(), this->tx_power);
+
+    /* 0 means "work with all of them", and so does a count at or past the
+       number of channels there are -- asking for the best 8 of 4 is the whole
+       set, not an error. Either way the list stays in ranked order, which is
+       what makes the tie rule below prefer the better channel. */
+    if (n_usable > 0U && n_usable < this->usable_channels.size())
+        this->usable_channels.resize(n_usable);
+};
 
 int BCS_scheduler::stalest_channel(void) const
 {
-    int   worst = -1;
+    int   worst  = -1;
     float lowest = 0.0f;
 
-    for (std::size_t c = 0; c < this->n_channels(); c++)
+    for (std::size_t c : this->usable_channels)
     {
         const float b = this->belief.of(c);
         if (b >= this->belief_threshold) continue;
@@ -28,18 +40,18 @@ int BCS_scheduler::stalest_channel(void) const
         }
     }
 
-    /* Ties go to the lowest index, which is what makes the opening slots probe
-       the channels in order: every belief starts at 0, so the first slot takes
-       channel 0, which then sits at 1 and leaves channel 1 as the lowest. */
+    /* Ties go to whichever comes first, which is the best-mean one: every
+       belief starts at 0, so the opening slots probe the usable channels in
+       rank order, best first. */
     return worst;
 }
 
 std::size_t BCS_scheduler::best_channel(void) const
 {
-    std::size_t best      = 0U;
-    double      best_rho  = this->rho_hat(0U, this->tx_power);
+    std::size_t best     = this->usable_channels.front();
+    double      best_rho = this->rho_hat(best, this->tx_power);
 
-    for (std::size_t c = 1U; c < this->n_channels(); c++)
+    for (std::size_t c : this->usable_channels)
     {
         const double rho = this->rho_hat(c, this->tx_power);
 
@@ -135,9 +147,10 @@ scheduled_frame_t BCS_scheduler::do_schedule_frame(void)
         /* Nothing to send. The slot would otherwise be idle, so spend it
            topping up the weakest estimate even though it is above the
            threshold -- a free refresh that makes the next transmitting slot
-           better informed. */
-        std::size_t weakest = 0U;
-        for (std::size_t c = 1U; c < this->n_channels(); c++)
+           better informed. Only among the ones it works with: probing a
+           channel it will never transmit on buys nothing. */
+        std::size_t weakest = this->usable_channels.front();
+        for (std::size_t c : this->usable_channels)
             if (this->belief.of(c) < this->belief.of(weakest)) weakest = c;
 
         scheduled_frame.channel    = weakest;
@@ -150,6 +163,12 @@ scheduled_frame_t BCS_scheduler::do_schedule_frame(void)
 
 std::string BCS_scheduler::get_name() const {
     /* Power is part of the name so runs at different tx_power don't overwrite
-       each other's scheduled-packet logs. */
-    return "BCS_" + std::to_string(this->tx_power) + "W";
+       each other's scheduled-packet logs, and so is the count of usable
+       channels: the narrowed variants are this same class, and would
+       otherwise all write to the one file. The full set keeps the plain name. */
+    const std::string power = std::to_string(this->tx_power) + "W";
+
+    return this->usable_channels.size() == this->n_channels()
+           ? "BCS_" + power
+           : "TCS" + std::to_string(this->usable_channels.size()) + "_" + power;
 }
