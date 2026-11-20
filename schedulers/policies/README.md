@@ -23,6 +23,13 @@ scheduler can ask, and because the policy *cannot* remove a packet, the
 split between classifying and dropping is now structural rather than a rule
 someone has to remember.
 
+`urgency.hpp` is the same argument from the other side. Whether the queue can
+spare a slot is one question; whether a packet is about to miss its deadline is
+another, and only the second is a fact about the queue. Keeping them apart is
+what lets a scheduler read the classification without being committed to any
+particular way of resolving it, which is exactly the difference between the
+listening rules of the schedulers that ship here.
+
 **Not here:**
 
 - **The channel estimate.** `BaseScheduler`'s channel set — the fitted FSMC
@@ -73,6 +80,7 @@ members is a worse interface than a function.
 | `belief_tracker.hpp` | Belief in the label last heard on each channel, and therefore when to spend a slot refreshing it. Decays each channel by its believed state's `A_ss` once per slot; an observation restores it to 1. |
 | `channel_choice.hpp` | `best_mean_channel()` — the channel with the highest fitted long-run mean decode probability at a given power. Static: it reads the models, not any observation, so it answers the same way whenever it is asked and is meant to be called once. Ties break on the lowest index. |
 | `feasibility.hpp` | `retx_count_required()` — transmissions a frame needs to clear its reliability target at a given decode probability — and `classify_feasibility()`, which runs that over the queue and returns the packets that can no longer make their deadline plus whether any has exactly enough slots left. Classifies only; removal is the caller's. |
+| `urgency.hpp` | `listening_affordable()` — whether this slot may be given up for listening, from the `feasibility_t` of the same slot and the caller's switch. False while some packet has exactly enough slots left, because that listen is paid for with its deadline. Answers affordability only: whether the estimate is worth refreshing at all is the staleness test, and stays with the scheduler. |
 | `rm_queue.hpp` | `select_shortest_period()` — rate-monotonic order, the fixed-priority counterpart to the one below. Needs a periodicity guard the deadline rule does not: an aperiodic packet has no period to rank by, so it sorts behind every periodic one and is only returned when nothing else is queued. |
 | `edf_queue.hpp` | `select_earliest_deadline()` — the queued packet with the earliest absolute deadline, or `nullptr` for an empty queue. Ties break on buffer position, which is release order. |
 

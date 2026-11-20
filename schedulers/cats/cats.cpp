@@ -11,6 +11,7 @@
 #include "cats.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 #include "schedulers/policies/feasibility.hpp"
+#include "schedulers/policies/urgency.hpp"
 
 
 CATS_scheduler::CATS_scheduler(std::size_t channel,
@@ -129,8 +130,6 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
     const feasibility_t feasibility =
         classify_feasibility(*this->buffer_packet, *(this->system_tick), p_best);
 
-    const bool no_urgent_packet = !feasibility.any_urgent;
-
     /* Removal is the switchable half. With early_drop off the infeasible list
        is simply discarded and those packets run to deadline expiry (or get
        retired by the reliability rule if the channel improves). */
@@ -143,16 +142,17 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
         }
     }
 
-    /* Listen if we don't trust the channel. With the urgency check on, hold
-       off while a packet is on the edge of its deadline; with it off, listen
-       regardless. Belief handling is identical either way. */
-    /* Belief decays at the believed state's own A_ss -- per channel and
+    /* Listen when the estimate is no longer trusted *and* the queue can spare
+       the slot. Two separate questions, asked in that order: belief decides
+       whether a refresh is wanted, urgency whether it is affordable.
+
+       Belief decays at the believed state's own A_ss -- per channel and
        per state, not one tuned constant for all of them, and every channel
        ages whether the radio is using it or not. Nothing is assigned on either
        side of this test: the ageing above and receive_state() below are the
        only two things that move it. */
     if (this->belief.stale(this->channel, this->belief_threshold)
-        && (!this->urgency_check || no_urgent_packet))
+        && listening_affordable(feasibility, this->urgency_check))
     {
         scheduled_frame.radio_mode = RX_MODE;
         scheduled_frame.packet = nullptr;
