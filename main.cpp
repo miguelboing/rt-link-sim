@@ -231,6 +231,23 @@ int main(int argc, char* argv[])
             std::move(sched_channels)
         );
     }
+    else if (sched_type == "LCS")
+    {
+        /* Walks a ladder of the channels ranked by long-run mean, so it takes
+           no `channel` field: where it starts is the top of that ladder and
+           where it goes is its own decision. */
+        if (sched_cfg.contains("channel"))
+            std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
+                         " the `channel` field in the config is ignored." << std::endl;
+
+        scheduler = std::make_unique<LCS_scheduler>(
+            sched_cfg["tx_power"],
+            sched_cfg["belief_threshold"],
+            &buffer,
+            system_tick,
+            std::move(sched_channels)
+        );
+    }
     else if (sched_type == "SCS")
     {
         /* Picks its own channel from the long-run means in the channel set, so

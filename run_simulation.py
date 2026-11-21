@@ -280,6 +280,15 @@ BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
 BASE_TCS2_SCHEDULER    = dict(BASE_BCS_SCHEDULER, n_usable=2)
 BASE_TCS3_SCHEDULER    = dict(BASE_BCS_SCHEDULER, n_usable=3)
 
+# LCS walks a ladder of the channels ranked by long-run mean: it holds the
+# highest rung it can, listens one rung down before ever moving to a worse
+# channel, and keeps only the rungs at or above its seat fresh. In SCHEDULERS
+# it sits between CHEDF and TCS2, which is its place in that figure's ladder of
+# channel knowledge: it re-chooses the channel, but one rung at a time and
+# along an ordering fixed before the run.
+BASE_LCS_SCHEDULER     = {"type": "LCS", "tx_power": 5, "belief_threshold": 0.7}
+BASE_LCS_SCHEDULER_25W = dict(BASE_LCS_SCHEDULER, tx_power=25)
+
 # The three ablation switches are spelled out rather than left to the C++
 # defaults so `experiment_params.json` records what a run actually used. All
 # three enabled is the published CATS. `tx_power` is read only when
@@ -376,7 +385,8 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # added but a new family does.
 _POWER_SYMBOLS = {"EDF": SYM_PFP, "RM": SYM_PFP,
                   "CHEDF": SYM_PCH, "CHARM": SYM_PCH, "SCS": SYM_PCH,
-                  "BCS": SYM_PCH, "TCS2": SYM_PCH, "TCS3": SYM_PCH}
+                  "BCS": SYM_PCH, "TCS2": SYM_PCH, "TCS3": SYM_PCH,
+                  "LCS": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
 # results dicts, name the test directories and name the per-scheduler logs, so
@@ -572,6 +582,7 @@ SCHEDULERS = [
     ("SCS_5W",     BASE_SCS_SCHEDULER),
     ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
+    ("LCS_5W",     BASE_LCS_SCHEDULER),
     ("TCS2_5W",    BASE_TCS2_SCHEDULER),
     ("BCS_5W",     BASE_BCS_SCHEDULER),
     ("CATS",       BASE_CATS_SCHEDULER),
