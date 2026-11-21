@@ -6,4 +6,5 @@
 #include "schedulers/charm/charm_scheduler.hpp"
 #include "schedulers/scs/scs_scheduler.hpp"
 #include "schedulers/bcs/bcs_scheduler.hpp"
+#include "schedulers/lcs/lcs_scheduler.hpp"
 #include "schedulers/cats/cats.hpp"
