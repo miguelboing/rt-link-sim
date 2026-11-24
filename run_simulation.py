@@ -23,13 +23,20 @@ TESTS_DIR = "tests"
 
 # The modes the CLI accepts, checked before anything runs — see the guard in
 # __main__ for why an unknown one must not fall through to `tests`.
-# Two experiments and one diagnostic. `single-channel` and `four-channel` each
-# run a whole experiment into one folder; `sweep`, `error_sweep` and
-# `cats_comparison` are no longer modes but the *cases* the single-channel mode
-# runs, so a figure can never be drawn from a different channel block than the
-# one its siblings used. `tests` is the full-log diagnostic path and is not a
-# figure, which is why it survives as a mode of its own.
-MODES = ("single-channel", "four-channel", "tests")
+# Three experiments and one diagnostic. `single-channel`, `four-channel` and
+# `four-channels-bcs-lcs` each run a whole experiment into one folder; `sweep`,
+# `error_sweep` and `cats_comparison` are no longer modes but the *cases* the
+# single-channel mode runs, so a figure can never be drawn from a different
+# channel block than the one its siblings used. `tests` is the full-log
+# diagnostic path and is not a figure, which is why it survives as a mode of
+# its own.
+#
+# `four-channels-bcs-lcs` runs the same four channels as `four-channel` but a
+# different question: not which scheduler wins, but what the two queue policies
+# (early dropping and the feasibility-driven listening gate) are each worth,
+# over both channel rules. It is a mode rather than extra curves because eight
+# ablation corners on the comparison figure made it a figure about switches.
+MODES = ("single-channel", "four-channel", "four-channels-bcs-lcs", "tests")
 
 # ── Figure style and paper symbols ────────────────────────────────────────────
 #
@@ -589,23 +596,23 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 #   SCS_5W         none                5 W       static, incl. ch.   best mean no
 #   CHEDF_5W       belief, one ch      5 W       refreshed estimate  best mean no
 #   CHEDF_25W      belief, one ch     25 W       refreshed estimate  best mean no
-#   LCS_LADDER_5W  belief              5 W       refreshed estimate  ladder    no
-#   LCS_FEAS_5W    belief + urgency    5 W       refreshed estimate  ladder    no
-#   LCS_DROP_5W    belief              5 W       refreshed estimate  ladder    yes
 #   LCS_5W         belief + urgency    5 W       refreshed estimate  ladder    yes
-#   BCS_5W         belief, every ch    5 W       refreshed estimate  per slot  no
-#   BCS_FEAS_5W    belief + urgency    5 W       refreshed estimate  per slot  no
-#   BCS_DROP_5W    belief, every ch    5 W       refreshed estimate  per slot  yes
 #   BCS_FULL_5W    belief + urgency    5 W       refreshed estimate  per slot  yes
 #   CATS           belief + urgency   adaptive   refreshed estimate  config    yes
 #
-# ⚠️ The CHEDF/BCS_5W pair is the point of this roster. Both are belief-driven
-# and both refresh on the same rule; CHEDF commits to one channel — the best by
-# long-run mean, the same rule SCS uses — while BCS re-chooses every slot. So
-# the gap between them is channel *re*-selection and nothing else, and the
-# gap from SCS is what refreshing the estimate of that one channel buys. That
-# is the whole reason BCS's queue switches default off: the pair only isolates
-# re-selection while nothing else is switched on underneath it.
+# ⚠️ The LCS/BCS pair is the point of this roster, and both are carried in
+# their *full* form — every queue policy on — so the gap between them is the
+# channel rule alone: a mean-ordered ladder walked a rung at a time against a
+# free choice among all four channels every slot. CHEDF is the same belief
+# rule committed to one channel, so CHEDF→LCS→BCS_FULL reads as a progression
+# in how freely the channel is chosen, and the gap from SCS is what refreshing
+# the estimate of that one channel buys.
+#
+# ⚠️ CHEDF carries neither queue policy, so a CHEDF→BCS_FULL gap is channel
+# re-selection *plus* early dropping *plus* the urgency check, not re-selection
+# alone as it was while BCS ran bare here. What each of those policies is worth
+# is the `four-channels-bcs-lcs` mode's question, measured there over both
+# channel rules at once, which is why this figure does not need to answer it.
 #
 # EDF and CATS still take their channel from the config (index 0). For EDF that
 # is the definition of its rung: with no channel knowledge it has nothing to
@@ -619,53 +626,24 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 # each slot, and a refreshed estimate with the power chosen from it.
 #
 # "belief" is the shared rule: belief in the last prediction decays at the
-# channel's mixing rate and a listen restores it. LCS and CATS additionally
-# refuse to listen while a packet is near its deadline; CHEDF and BCS listen on
-# belief alone, so a listen there can consume a slot an urgent packet needed.
+# channel's mixing rate and a listen restores it. LCS, BCS_FULL and CATS
+# additionally refuse to listen while a packet is near its deadline; CHEDF
+# listens on belief alone, so a listen there can consume a slot an urgent
+# packet needed.
 #
 # Early dropping — discarding a packet whose remaining slots cannot cover its
-# reliability target — is done by LCS and CATS only, and on both of them it is
-# a switch (`early_drop`, with `urgency_check` beside it) rather than something
-# built in. Both default on, so a roster entry that names neither gets the full
-# scheduler. The rest drop nothing early; the buffer's deadline expiry is a
-# different thing.
+# reliability target — is done by LCS, BCS and CATS, and on all three it is a
+# switch (`early_drop`, with `urgency_check` beside it) rather than something
+# built in. ⚠️ The defaults differ: both switches default on for LCS and CATS
+# and off for BCS, which is why the full BCS has to be named
+# (BASE_BCS_FULL_SCHEDULER) while the full LCS is the plain dict. EDF, SCS and
+# CHEDF drop nothing early; the buffer's deadline expiry is a different thing.
 #
-# The four LCS entries are one scheduler at the four settings of those two
-# switches, so they are the only entries here whose gaps are *queue* policy
-# rather than channel knowledge. All four sit on the same rung of the ladder
-# above and choose channels the same way: LCS_LADDER has neither policy,
-# LCS_FEAS declines a listen the queue cannot afford, LCS_DROP discards what
-# can no longer be saved, LCS_5W does both. They are listed in that order so
-# the block reads as a build-up and the full scheduler lands next to BCS, the
-# next rung of channel knowledge.
-#
-# A full 2x2 rather than two arms off one corner, because each policy then has
-# two readings — LADDER→FEAS and DROP→LCS for the feasibility check,
-# LADDER→DROP and FEAS→LCS for early dropping — and a difference between the
-# two readings of one policy *is* the interaction between them. There is one:
-# the urgency check is what makes the channel decision depend on the queue at
-# all, so dropping changes which slots get listened on only when it is enabled.
-#
-# They are deliberately not read against CATS, which also picks its power and
-# its channel differently; the only clean isolation of these two policies on
-# this figure is within a family.
-#
-# BCS carries the same 2x2 (BCS_5W, BCS_FEAS_5W, BCS_DROP_5W, BCS_FULL_5W), so
-# the two policies are measured over two different channel rules rather than
-# one — a policy that only helps a scheduler walking a static ladder is a
-# different claim from one that helps whatever the channel rule is. ⚠️ The
-# corner that keeps the plain name differs between the two families: BCS_5W is
-# the *bare* scheduler because BCS defaults both switches off, while LCS_5W is
-# the *full* one because LCS defaults both on. The legends spell this out
-# ("BCS, selection only" against "LCS, full"); the labels do not.
-#
-# ⚠️ At 13 entries this roster is past tab10, so _draw_scenario_panel draws it
-# on tab20 and every curve is recoloured relative to a 10-entry figure. It is
-# also exactly the length of the linestyle and marker lists, so one more entry
-# makes two curves share a style unless those lists grow with it. If the
-# panels get unreadable, the ablation corners are what to move out — they are
-# a policy study, and cats_comparison is the precedent for giving one its own
-# mode and its own figures.
+# What those two policies are each worth is deliberately *not* asked here: the
+# eight corners that answer it are the `four-channels-bcs-lcs` mode's roster,
+# BCS_LCS_SCHEDULERS below. Keeping them out is what holds this figure at seven
+# curves — within tab10, one style each — and keeps it a comparison of
+# schedulers rather than of switches.
 #
 # Only CHEDF is carried at both powers, since 10 W vs 25 W is the comparison
 # that matters for a scheduler that spends its power under a retransmission
@@ -678,6 +656,31 @@ SCHEDULERS = [
     ("SCS_5W",        BASE_SCS_SCHEDULER),
     ("CHEDF_5W",      BASE_CHEDF_SCHEDULER),
     ("CHEDF_25W",     BASE_CHEDF_SCHEDULER_25W),
+    ("LCS_5W",        BASE_LCS_SCHEDULER),
+    ("BCS_FULL_5W",   BASE_BCS_FULL_SCHEDULER),
+    ("CATS",          BASE_CATS_SCHEDULER),
+]
+
+# The roster of the `four-channels-bcs-lcs` mode: the two channel-choosing
+# schedulers at all four settings of their two queue switches, and nothing
+# else. It is a policy study, so it is a mode of its own rather than eight more
+# curves on the figure above — the same reasoning that gives the CATS ablation
+# its own case, and the reason that figure stays at seven readable curves.
+#
+# Read it two ways. Down a family, each pair differing in one switch isolates
+# that switch, and both readings of a switch exist (LADDER->FEAS and
+# DROP->LCS are both the feasibility check), so a disagreement between the two
+# readings is the interaction between the policies. Across the families, the
+# same corner under two channel rules says whether a policy's effect depends
+# on how the channel is chosen — a policy that only pays off for a scheduler
+# walking a static ladder is a different finding from one that pays off
+# whatever the channel rule is.
+#
+# ⚠️ The plain-named corner is not the same corner in the two families. BCS_5W
+# is the *bare* scheduler and LCS_5W is the *full* one, because the C++
+# defaults differ (see BASE_BCS_SCHEDULER above). The legends spell that out;
+# the labels do not.
+BCS_LCS_SCHEDULERS = [
     ("LCS_LADDER_5W", BASE_LCS_LADDER_SCHEDULER),
     ("LCS_FEAS_5W",   BASE_LCS_FEAS_SCHEDULER),
     ("LCS_DROP_5W",   BASE_LCS_DROP_SCHEDULER),
@@ -686,7 +689,6 @@ SCHEDULERS = [
     ("BCS_FEAS_5W",   BASE_BCS_FEAS_SCHEDULER),
     ("BCS_DROP_5W",   BASE_BCS_DROP_SCHEDULER),
     ("BCS_FULL_5W",   BASE_BCS_FULL_SCHEDULER),
-    ("CATS",          BASE_CATS_SCHEDULER),
 ]
 
 # The roster of the `single-channel` mode's U sweep, on C = 1. It is v1.1's
@@ -2420,14 +2422,16 @@ def write_experiment_params(mode: str, n_runs: int, run_name: Optional[str]) -> 
                 ("error_sweep",     ERROR_SWEEP_SCHEDULERS),
             )}
             if mode == "single-channel"
-            else {name: cfg for name, cfg in SCHEDULERS}
+            else {name: cfg for name, cfg in (
+                BCS_LCS_SCHEDULERS if mode == "four-channels-bcs-lcs"
+                else SCHEDULERS)}
         ),
         "channels":    BASE_CHANNELS,
     }
 
-    # Both experiments sweep U over SWEEP_SCENARIOS — only `tests` mode runs
-    # the fixed-U SCENARIOS list.
-    if mode in ("single-channel", "four-channel"):
+    # Every experiment mode sweeps U over SWEEP_SCENARIOS — only `tests` mode
+    # runs the fixed-U SCENARIOS list.
+    if mode in ("single-channel", "four-channel", "four-channels-bcs-lcs"):
         params["scenarios"] = {
             "SWEEP_SCENARIOS": [
                 {"n": n, "c_min": c_min, "c_max": c_max,
@@ -2516,7 +2520,8 @@ if __name__ == "__main__":
         # different listening policies. The names are printed so the
         # reach of the override is visible in the run header.
         _rosters = (SCHEDULERS, SINGLE_CHANNEL_SCHEDULERS,
-                    ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS)
+                    ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS,
+                    BCS_LCS_SCHEDULERS)
         touched = sorted({name for roster in _rosters
                           for name, cfg in roster if "belief_threshold" in cfg})
         for roster in _rosters:
@@ -2547,7 +2552,7 @@ if __name__ == "__main__":
     # built later embeds it.
     if mode == "single-channel":
         BASE_CHANNELS = SINGLE_CHANNEL
-    elif mode == "four-channel":
+    elif mode in ("four-channel", "four-channels-bcs-lcs"):
         BASE_CHANNELS = FOUR_CHANNELS
 
     # Snapshot every parameter that affects the run. Called after CLI
@@ -2594,6 +2599,25 @@ if __name__ == "__main__":
         results = run_sweep(n_runs, n_workers, schedulers=SCHEDULERS)
         plot_schedulability(results)
         plot_channel_usage(results)
+        print(f"\nTotal elapsed: {format_duration(time.perf_counter() - t_start)}")
+        sys.exit(0)
+
+    if mode == "four-channels-bcs-lcs":
+        warn_window_k(SWEEP_SCENARIOS)
+        print(f"Running BCS/LCS queue-policy comparison on "
+              f"{', '.join(c['name'] for c in BASE_CHANNELS)} "
+              f"({n_runs} runs/point, {n_workers} workers, "
+              f"window_k={BASE_SIM.get('window_k', 100)})")
+
+        # Its own basenames: this mode draws the same two figures as
+        # `four-channel` over a different roster, and a shared basename would
+        # make two runs' outputs indistinguishable by filename alone.
+        results = run_sweep(n_runs, n_workers, schedulers=BCS_LCS_SCHEDULERS)
+        plot_schedulability(results, basename="results_bcs_lcs",
+                            title=f"BCS and LCS queue policies"
+                                  f"{_window_k_suffix()}")
+        plot_channel_usage(results, basename="results_bcs_lcs_channels",
+                           title="Channel usage — BCS and LCS queue policies")
         print(f"\nTotal elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 

@@ -55,6 +55,7 @@
 # Override defaults via --export, e.g.:
 #     sbatch --export=N_RUNS=200,MODE=four-channel,ALL  run_slurm.sh [belief_threshold] [utilization_threshold]
 #     sbatch --export=N_RUNS=200,MODE=single-channel,ALL run_slurm.sh
+#     sbatch --export=N_RUNS=200,MODE=four-channels-bcs-lcs,ALL run_slurm.sh
 # Reproducible run (same SEED → bit-identical output PNGs):
 #     sbatch --export=SEED=42,ALL run_slurm.sh
 # Override the weakly-hard (m,k) window used by the sched_ratio_mk curve
@@ -109,10 +110,10 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
 N_RUNS="${N_RUNS:-50}"            # runs averaged per (scenario, U, scheduler) point
-MODE="${MODE:-four-channel}"      # single-channel | four-channel | tests
+MODE="${MODE:-four-channel}"      # single-channel | four-channel | four-channels-bcs-lcs | tests
 case "${MODE}" in
-    single-channel|four-channel|tests) ;;
-    *) echo "ERROR: MODE='${MODE}' is not one of single-channel|four-channel|tests." >&2
+    single-channel|four-channel|four-channels-bcs-lcs|tests) ;;
+    *) echo "ERROR: MODE='${MODE}' is not one of single-channel|four-channel|four-channels-bcs-lcs|tests." >&2
        echo "       sweep, error_sweep and cats_comparison are no longer modes --" >&2
        echo "       they are the three cases the single-channel mode runs." >&2
        echo "       A typo here used to run the far heavier 'tests' mode instead," >&2
