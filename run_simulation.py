@@ -258,36 +258,53 @@ BASE_CHARM_SCHEDULER_25W = dict(BASE_CHARM_SCHEDULER, tx_power=25)
 # ⚠️ It takes no `channel` field — the choice is per slot, which is what
 # separates it from every other entry in the roster.
 #
-# `n_usable` is how many channels it works with, best long-run mean first;
-# absent or 0 means all of them. Narrowing the set is an optimisation, not a
-# handicap: every channel it works with is an estimate to keep fresh, and every
-# refresh is a slot spent probing rather than transmitting, so a smaller set
-# hands those slots back to the queue. What it gives up is the chance that a
-# channel left out would have been the good one at that moment.
-#
-# TCS2 and BCS are the same type at `n_usable` 2 and all — so the gap between
-# those two curves is that trade and nothing else. Measured on four channels at
-# 5 W under saturating load: TX 3556 against 3240, RX 444 against 760, i.e. the
-# best two return about 10% of the run to transmitting. `n_usable=1` reproduces
-# CHEDF exactly, which is why there is no TCS1 — CHEDF already is it.
-#
-# BASE_TCS3_SCHEDULER is kept but unused: 3 of 4 channels sat between the two
-# curves on every measure, so it added a line without adding a result. Put it
-# back in SCHEDULERS if the middle of that trade ever needs showing.
+# The C++ side also takes `n_usable`, how many channels it works with, best
+# long-run mean first; absent or 0 (the case here) means all of them. No roster
+# entry restricts it any more — the restricted variants were dropped, since the
+# narrowed set measured as a middle point between BCS and a single-channel
+# scheduler rather than as a result of its own. `n_usable=1` reproduces CHEDF
+# exactly, which is the one use the knob still earns: a cross-check between two
+# classes that should agree.
 BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7}
 BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
-
-BASE_TCS2_SCHEDULER    = dict(BASE_BCS_SCHEDULER, n_usable=2)
-BASE_TCS3_SCHEDULER    = dict(BASE_BCS_SCHEDULER, n_usable=3)
 
 # LCS walks a ladder of the channels ranked by long-run mean: it holds the
 # highest rung it can, listens one rung down before ever moving to a worse
 # channel, and keeps only the rungs at or above its seat fresh. In SCHEDULERS
-# it sits between CHEDF and TCS2, which is its place in that figure's ladder of
+# it sits between CHEDF and BCS, which is its place in that figure's ladder of
 # channel knowledge: it re-chooses the channel, but one rung at a time and
 # along an ordering fixed before the run.
-BASE_LCS_SCHEDULER     = {"type": "LCS", "tx_power": 5, "belief_threshold": 0.7}
+#
+# On top of the ladder it runs the two queue policies CATS runs: it drops
+# packets that can no longer make their deadline, and it declines to listen on
+# a slot some packet needs at exactly that moment. Both are spelled out rather
+# than left to the C++ defaults so `experiment_params.json` records what ran,
+# and both switch off independently for an ablation — the C++ `get_name()`
+# encodes a switched-off policy, so an arm cannot overwrite the full
+# scheduler's logs.
+BASE_LCS_SCHEDULER     = {"type": "LCS", "tx_power": 5, "belief_threshold": 0.7,
+                          "early_drop": True, "urgency_check": True}
 BASE_LCS_SCHEDULER_25W = dict(BASE_LCS_SCHEDULER, tx_power=25)
+
+# The other three corners of the 2x2, all on the four-channel figure beside the
+# full scheduler: the bare ladder with neither queue policy, and the two arms
+# that add exactly one of them. Every pair that differs in one switch is a
+# clean isolation of that switch — LADDER→FEAS and DROP→LCS are both "what the
+# feasibility check does", LADDER→DROP and FEAS→LCS are both "what early
+# dropping does" — and having both readings of each is what shows whether the
+# two policies interact (they do: the urgency check is what makes the channel
+# decision depend on the queue at all).
+#
+# ⚠️ The roster label names what an arm *has* and the C++ `get_name()` names
+# what it *lacks*, so these two write `LCS_5W_nodrop` and `LCS_5W_nourg`
+# scheduled-packet logs respectively. The spellings are deliberately not the
+# same word — a log named after the switch that is off cannot be confused with
+# a roster label asserting the switch that is on — but it does mean the log
+# file for `LCS_FEAS_5W` is not called that.
+BASE_LCS_LADDER_SCHEDULER = dict(BASE_LCS_SCHEDULER, early_drop=False,
+                                 urgency_check=False)
+BASE_LCS_FEAS_SCHEDULER   = dict(BASE_LCS_SCHEDULER, early_drop=False)
+BASE_LCS_DROP_SCHEDULER   = dict(BASE_LCS_SCHEDULER, urgency_check=False)
 
 # The three ablation switches are spelled out rather than left to the C++
 # defaults so `experiment_params.json` records what a run actually used. All
@@ -385,22 +402,30 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 # added but a new family does.
 _POWER_SYMBOLS = {"EDF": SYM_PFP, "RM": SYM_PFP,
                   "CHEDF": SYM_PCH, "CHARM": SYM_PCH, "SCS": SYM_PCH,
-                  "BCS": SYM_PCH, "TCS2": SYM_PCH, "TCS3": SYM_PCH,
-                  "LCS": SYM_PCH}
+                  "BCS": SYM_PCH, "LCS": SYM_PCH, "LCS_LADDER": SYM_PCH,
+                  "LCS_FEAS": SYM_PCH, "LCS_DROP": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
 # results dicts, name the test directories and name the per-scheduler logs, so
 # they stay terse and ASCII; these are the display names. scheduler_title()
 # consults this for the label's *base* (the part before any `_<n>W`), so a
 # fixed-power variant still gets its power appended in the usual parenthesis.
-# Every entry names only what differs from full CATS — adaptive power, early
-# dropping and the urgency check are all on unless the name says otherwise.
+# Every CATS entry names only what differs from full CATS — adaptive power,
+# early dropping and the urgency check are all on unless the name says
+# otherwise. The LCS entries read the other way round, naming the one policy an
+# arm has, because two of the three are arms rather than the default; plain
+# `LCS` is spelled out as "full" so an unqualified LCS curve on the same axis
+# as its arms cannot be read as the bare ladder.
 _ABLATION_TITLES = {
     "CATS_FULL":         "CATS, full",
     "CATS_FIX_DROP":     "CATS, fixed power",
     "CATS_FIX_NODROP":   "CATS, fixed power, no early drop",
     "CATS_ADAPT_NODROP": "CATS, no early drop",
     "CATS_NOURG":        "CATS, no urgency check",
+    "LCS":               "LCS, full",
+    "LCS_LADDER":        "LCS, ladder only",
+    "LCS_FEAS":          "LCS, feasibility check only",
+    "LCS_DROP":          "LCS, early drop only",
 }
 
 def scheduler_title(label: str, *extra: str) -> str:
@@ -535,15 +560,19 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 # (RM, MPRM, CHARM) were retired rather than re-run. What is left varies is
 # channel knowledge and how power is spent.
 #
-# The roster of the paper's Simulation 1. Read across the four properties:
+# The roster of the paper's Simulation 1. Read across the five properties:
 #
-#   scheduler    listening          power      redundancy                channel
-#   EDF_5W       none                5 W       none, one send per frame  config
-#   SCS_5W       none                5 W       static, incl. the channel best mean
-#   CHEDF_5W     belief, one ch      5 W       refreshed estimate        best mean
-#   CHEDF_25W    belief, one ch     25 W       refreshed estimate        best mean
-#   BCS_5W       belief, every ch    5 W       refreshed estimate        per slot
-#   CATS         belief + urgency   adaptive   refreshed estimate        config
+#   scheduler      listening          power      redundancy          channel   drops
+#   EDF_5W         none                5 W       none, 1 send/frame  config    no
+#   SCS_5W         none                5 W       static, incl. ch.   best mean no
+#   CHEDF_5W       belief, one ch      5 W       refreshed estimate  best mean no
+#   CHEDF_25W      belief, one ch     25 W       refreshed estimate  best mean no
+#   LCS_LADDER_5W  belief              5 W       refreshed estimate  ladder    no
+#   LCS_FEAS_5W    belief + urgency    5 W       refreshed estimate  ladder    no
+#   LCS_DROP_5W    belief              5 W       refreshed estimate  ladder    yes
+#   LCS_5W         belief + urgency    5 W       refreshed estimate  ladder    yes
+#   BCS_5W         belief, every ch    5 W       refreshed estimate  per slot  no
+#   CATS           belief + urgency   adaptive   refreshed estimate  config    yes
 #
 # ⚠️ The CHEDF/BCS pair is the point of this roster. Both are belief-driven and
 # both refresh on the same rule; CHEDF commits to one channel — the best by
@@ -558,18 +587,41 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 # channel selection.
 #
 # It is a ladder of channel knowledge: none, the long-run average, a refreshed
-# estimate of the best channel, refreshed estimates of every channel with the
-# channel re-chosen each slot, and a refreshed estimate with the power chosen
-# from it.
+# estimate of the best channel, a mean-ordered ladder of channels walked a rung
+# at a time, refreshed estimates of every channel with the channel re-chosen
+# each slot, and a refreshed estimate with the power chosen from it.
 #
 # "belief" is the shared rule: belief in the last prediction decays at the
-# channel's mixing rate and a listen restores it. CATS additionally refuses to
-# listen while a packet is near its deadline; CHEDF listens on belief alone, so
-# a listen there can consume a slot an urgent packet needed.
+# channel's mixing rate and a listen restores it. LCS and CATS additionally
+# refuse to listen while a packet is near its deadline; CHEDF and BCS listen on
+# belief alone, so a listen there can consume a slot an urgent packet needed.
 #
-# Early dropping is not a knob: it is built into CATS (it discards a packet
-# whose remaining slots cannot cover its reliability target) and no other
-# scheduler does it.
+# Early dropping — discarding a packet whose remaining slots cannot cover its
+# reliability target — is done by LCS and CATS only, and on both of them it is
+# a switch (`early_drop`, with `urgency_check` beside it) rather than something
+# built in. Both default on, so a roster entry that names neither gets the full
+# scheduler. The rest drop nothing early; the buffer's deadline expiry is a
+# different thing.
+#
+# The four LCS entries are one scheduler at the four settings of those two
+# switches, so they are the only entries here whose gaps are *queue* policy
+# rather than channel knowledge. All four sit on the same rung of the ladder
+# above and choose channels the same way: LCS_LADDER has neither policy,
+# LCS_FEAS declines a listen the queue cannot afford, LCS_DROP discards what
+# can no longer be saved, LCS_5W does both. They are listed in that order so
+# the block reads as a build-up and the full scheduler lands next to BCS, the
+# next rung of channel knowledge.
+#
+# A full 2x2 rather than two arms off one corner, because each policy then has
+# two readings — LADDER→FEAS and DROP→LCS for the feasibility check,
+# LADDER→DROP and FEAS→LCS for early dropping — and a difference between the
+# two readings of one policy *is* the interaction between them. There is one:
+# the urgency check is what makes the channel decision depend on the queue at
+# all, so dropping changes which slots get listened on only when it is enabled.
+#
+# They are deliberately not read against CATS, which also picks its power and
+# its channel differently; the only clean isolation of these two policies on
+# this figure is within the LCS family.
 #
 # Only CHEDF is carried at both powers, since 10 W vs 25 W is the comparison
 # that matters for a scheduler that spends its power under a retransmission
@@ -578,14 +630,16 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 # Ordered by family, with a family's two power levels adjacent: the panel
 # drawer takes color from enumeration order.
 SCHEDULERS = [
-    ("EDF_5W",     BASE_EDF_SCHEDULER),
-    ("SCS_5W",     BASE_SCS_SCHEDULER),
-    ("CHEDF_5W",   BASE_CHEDF_SCHEDULER),
-    ("CHEDF_25W",  BASE_CHEDF_SCHEDULER_25W),
-    ("LCS_5W",     BASE_LCS_SCHEDULER),
-    ("TCS2_5W",    BASE_TCS2_SCHEDULER),
-    ("BCS_5W",     BASE_BCS_SCHEDULER),
-    ("CATS",       BASE_CATS_SCHEDULER),
+    ("EDF_5W",        BASE_EDF_SCHEDULER),
+    ("SCS_5W",        BASE_SCS_SCHEDULER),
+    ("CHEDF_5W",      BASE_CHEDF_SCHEDULER),
+    ("CHEDF_25W",     BASE_CHEDF_SCHEDULER_25W),
+    ("LCS_LADDER_5W", BASE_LCS_LADDER_SCHEDULER),
+    ("LCS_FEAS_5W",   BASE_LCS_FEAS_SCHEDULER),
+    ("LCS_DROP_5W",   BASE_LCS_DROP_SCHEDULER),
+    ("LCS_5W",        BASE_LCS_SCHEDULER),
+    ("BCS_5W",        BASE_BCS_SCHEDULER),
+    ("CATS",          BASE_CATS_SCHEDULER),
 ]
 
 # The roster of the `single-channel` mode's U sweep, on C = 1. It is v1.1's
