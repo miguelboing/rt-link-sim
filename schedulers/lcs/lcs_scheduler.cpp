@@ -6,11 +6,15 @@
 #include "lcs_scheduler.hpp"
 #include "schedulers/policies/channel_choice.hpp"
 #include "schedulers/policies/edf_queue.hpp"
+#include "schedulers/policies/feasibility.hpp"
+#include "schedulers/policies/urgency.hpp"
 
 LCS_scheduler::LCS_scheduler(unsigned int tx_power, float belief_threshold,
+                             bool early_drop, bool urgency_check,
                              BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                              std::vector<channel_estimate_t> channels):
     BaseScheduler(buffer, sys_tick, std::move(channels)), tx_power(tx_power),
+    early_drop(early_drop), urgency_check(urgency_check),
     belief_threshold(belief_threshold)
 {
     this->ladder = rank_channels_by_mean(this->get_channels(), this->tx_power);
@@ -87,9 +91,39 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
        whether anything is listening or not. */
     this->belief.age(this->get_channels());
 
+    /* Judge the queue at the decode estimate of the rung the radio is on as
+       the slot opens -- the channel a transmission this slot would most likely
+       go out on, and the one every packet still queued was last costed
+       against. The seat may yet climb below, which makes this an estimate one
+       slot behind on the slots a packet needs; that is the same lag any
+       estimate-driven count carries, and reading the queue before the seat is
+       what keeps the watch list from being chosen off a probability that was
+       derived from the watch list. */
+    const double p_seat = this->rho_hat(this->ladder[this->seat], this->tx_power);
+
+    const feasibility_t feasibility =
+        classify_feasibility(*this->buffer_packet, *(this->system_tick), p_seat);
+
+    /* Only the removal is switchable. The list above is built in both
+       settings, so a packet that is past saving never arrives in the urgent
+       set by the back door and the two switches stay independent. */
+    if (this->early_drop)
+    {
+        for (const auto& [id, id_count] : feasibility.infeasible)
+        {
+            this->accumulated_prob.erase(packet_key(id, id_count));
+            this->buffer->drop_packet(id, id_count);
+        }
+    }
+
+    /* Whether a slot may be spent listening at all. Asked once, because both
+       places this scheduler listens -- the watch-list refresh and the probe
+       one rung down -- are the same trade against the same queue. */
+    const bool may_listen = listening_affordable(feasibility, this->urgency_check);
+
     const int due = this->rung_to_refresh();
 
-    if (due >= 0)
+    if (due >= 0 && may_listen)
     {
         /* Rebuild the watch list before using it. Nothing is assigned to
            belief here: ageing and receive_state() are the only two things that
@@ -110,12 +144,13 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
     const double      rho    = this->rho_hat(chosen, this->tx_power);
     const double      mean   = this->get_channels()[chosen].model.rho_bar(this->tx_power);
 
-    if (rho < mean)
+    if (rho < mean && may_listen)
     {
-        /* Below what this channel manages on average, so the rungs underneath
-           are worth considering. Walk down from the one immediately below: the
-           first rung worth leaving for that this scheduler cannot currently
-           hear is the one to spend the slot listening to.
+        /* Below what this channel manages on average, and the queue can spare
+           a slot, so the rungs underneath are worth considering. Walk down
+           from the one immediately below: the first rung worth leaving for
+           that this scheduler cannot currently hear is the one to spend the
+           slot listening to.
 
            A rung that is already fresh is skipped rather than probed. Its
            estimate took part in the seat decision above, so listening to it
@@ -196,6 +231,12 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
 std::string LCS_scheduler::get_name() const
 {
     /* Power is part of the name so runs at different tx_power do not overwrite
-       each other's scheduled-packet logs. */
-    return "LCS_" + std::to_string(this->tx_power) + "W";
+       each other's scheduled-packet logs, and so is a switched-off policy, so
+       an ablation arm does not overwrite the full scheduler's. */
+    std::string name = "LCS_" + std::to_string(this->tx_power) + "W";
+
+    if (!this->early_drop)    name += "_nodrop";
+    if (!this->urgency_check) name += "_nourg";
+
+    return name;
 }

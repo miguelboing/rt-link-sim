@@ -240,9 +240,13 @@ int main(int argc, char* argv[])
             std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
                          " the `channel` field in the config is ignored." << std::endl;
 
+        /* Both policies default on: a config that names neither gets the full
+           scheduler, and an ablation arm is the one that has to say so. */
         scheduler = std::make_unique<LCS_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["belief_threshold"],
+            sched_cfg.value("early_drop", true),
+            sched_cfg.value("urgency_check", true),
             &buffer,
             system_tick,
             std::move(sched_channels)

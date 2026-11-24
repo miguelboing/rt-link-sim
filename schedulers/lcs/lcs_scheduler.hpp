@@ -26,11 +26,18 @@
 
    The rule, in order, once per slot:
 
-     1. *Keep the watch list fresh.* The watch list is the seat and every rung
-        above it. If any of them has decayed below belief_threshold, the slot
-        becomes an RX slot on the highest such rung -- highest rather than
-        stalest, because a better channel is the one worth knowing about first
-        and the one a climb would move to.
+     0. *Classify the queue, and drop what is already lost.* Every queued
+        packet is measured against the slots it has left at the decode
+        estimate of the channel the radio is sitting on. A packet that can no
+        longer be delivered in time is removed while early_drop is on, which
+        hands the slots it would have taken back to the packets that can still
+        make it. A packet with exactly enough slots left makes the queue
+        urgent, which is what the two listening steps below have to get past.
+     1. *Keep the watch list fresh, if the queue can spare the slot.* The watch
+        list is the seat and every rung above it. If any of them has decayed
+        below belief_threshold, the slot becomes an RX slot on the highest such
+        rung -- highest rather than stalest, because a better channel is the
+        one worth knowing about first and the one a climb would move to.
      2. *Take the best seat the fresh estimates support.* Among the rungs above
         the seat and any rung below it that is still fresh, whichever has the
         highest decode estimate becomes the seat, ties going to the higher
@@ -42,7 +49,8 @@
         the rung below averages and what it was last heard doing, counting the
         latter only while that estimate is still believed. A seat that clears
         the bar is kept anyway -- below its own average, but still better than
-        the alternative. A seat that does not is given up: the slot becomes an
+        the alternative. A seat that does not is given up, again only while the
+        queue can spare the slot: it becomes an
         RX slot on the rung below, which is a listen and not yet a move. If
         that rung is already fresh there is nothing to learn by listening to
         it, so the search carries on to the next rung down, and if nothing
@@ -54,16 +62,40 @@
    promising by its average and turns out to be bad costs one listening slot,
    not a run of transmissions on a bad channel.
 
+   Listening is affordable rather than free. Both ways a slot is given up to
+   it -- refreshing the watch list and probing the rung below -- are gated on
+   the same affordability test, so a slot that some packet needs at exactly
+   that moment is spent transmitting on an estimate this scheduler already
+   distrusts instead of on a refresh. The empty-queue refresh at the end is not
+   gated: with nothing queued there is nothing that can be urgent.
+
+   Both of those halves are switchable, and independently. Classifying the
+   queue and removing from it are separate steps, so early_drop off leaves
+   hopeless packets queued *and still classified* -- turning dropping off
+   cannot quietly change which packets count as urgent. urgency_check off
+   removes only the affordability term, leaving the ladder, the belief rule and
+   the classification exactly as they were.
+
    Retransmission is the accumulated-probability rule, sized from the seat's
    current decode estimate. Power is fixed. Queue order is by deadline. */
 class LCS_scheduler : public BaseScheduler
 {
 public:
     LCS_scheduler(unsigned int tx_power, float belief_threshold,
+                  bool early_drop, bool urgency_check,
                   BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                   std::vector<channel_estimate_t> channels);
 
     unsigned int tx_power;
+
+    /* When false, packets that can no longer make their deadline stay in the
+       buffer until it expires them. They are classified either way, so this
+       governs the removal and nothing else. */
+    bool early_drop;
+
+    /* When false, a slot may be given up for listening however close a packet
+       is to its deadline. */
+    bool urgency_check;
 
     /* Belief in the label last heard on each channel, and the floor below
        which an estimate stops counting as something this scheduler knows. */
