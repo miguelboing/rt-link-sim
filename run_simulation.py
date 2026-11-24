@@ -265,8 +265,24 @@ BASE_CHARM_SCHEDULER_25W = dict(BASE_CHARM_SCHEDULER, tx_power=25)
 # scheduler rather than as a result of its own. `n_usable=1` reproduces CHEDF
 # exactly, which is the one use the knob still earns: a cross-check between two
 # classes that should agree.
-BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7}
+#
+# The two queue switches are spelled out here as well, and for BCS they are
+# **off** — the opposite default from LCS, and the C++ side agrees. Plain BCS
+# is the channel-re-selection baseline: what it is read against differs from it
+# in which channel each slot goes to and nothing else, so a queue policy
+# switched on underneath would quietly join that gap. The three variants below
+# turn them on, and `get_name()` spells out a switched-*on* policy (`BCS_5W_drop`,
+# `BCS_5W_urg`, `BCS_5W_drop_urg`) because a name encodes the deviation from
+# its own scheduler's defaults — which is why the same two switches are
+# written the other way round on LCS.
+BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7,
+                          "early_drop": False, "urgency_check": False}
 BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
+
+BASE_BCS_FEAS_SCHEDULER = dict(BASE_BCS_SCHEDULER, urgency_check=True)
+BASE_BCS_DROP_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True)
+BASE_BCS_FULL_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True,
+                               urgency_check=True)
 
 # LCS walks a ladder of the channels ranked by long-run mean: it holds the
 # highest rung it can, listens one rung down before ever moving to a worse
@@ -403,7 +419,9 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 _POWER_SYMBOLS = {"EDF": SYM_PFP, "RM": SYM_PFP,
                   "CHEDF": SYM_PCH, "CHARM": SYM_PCH, "SCS": SYM_PCH,
                   "BCS": SYM_PCH, "LCS": SYM_PCH, "LCS_LADDER": SYM_PCH,
-                  "LCS_FEAS": SYM_PCH, "LCS_DROP": SYM_PCH}
+                  "LCS_FEAS": SYM_PCH, "LCS_DROP": SYM_PCH,
+                  "BCS_FEAS": SYM_PCH, "BCS_DROP": SYM_PCH,
+                  "BCS_FULL": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
 # results dicts, name the test directories and name the per-scheduler logs, so
@@ -426,6 +444,10 @@ _ABLATION_TITLES = {
     "LCS_LADDER":        "LCS, ladder only",
     "LCS_FEAS":          "LCS, feasibility check only",
     "LCS_DROP":          "LCS, early drop only",
+    "BCS":               "BCS, selection only",
+    "BCS_FEAS":          "BCS, feasibility check only",
+    "BCS_DROP":          "BCS, early drop only",
+    "BCS_FULL":          "BCS, full",
 }
 
 def scheduler_title(label: str, *extra: str) -> str:
@@ -572,13 +594,18 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 #   LCS_DROP_5W    belief              5 W       refreshed estimate  ladder    yes
 #   LCS_5W         belief + urgency    5 W       refreshed estimate  ladder    yes
 #   BCS_5W         belief, every ch    5 W       refreshed estimate  per slot  no
+#   BCS_FEAS_5W    belief + urgency    5 W       refreshed estimate  per slot  no
+#   BCS_DROP_5W    belief, every ch    5 W       refreshed estimate  per slot  yes
+#   BCS_FULL_5W    belief + urgency    5 W       refreshed estimate  per slot  yes
 #   CATS           belief + urgency   adaptive   refreshed estimate  config    yes
 #
-# ⚠️ The CHEDF/BCS pair is the point of this roster. Both are belief-driven and
-# both refresh on the same rule; CHEDF commits to one channel — the best by
+# ⚠️ The CHEDF/BCS_5W pair is the point of this roster. Both are belief-driven
+# and both refresh on the same rule; CHEDF commits to one channel — the best by
 # long-run mean, the same rule SCS uses — while BCS re-chooses every slot. So
 # the gap between them is channel *re*-selection and nothing else, and the
-# gap from SCS is what refreshing the estimate of that one channel buys.
+# gap from SCS is what refreshing the estimate of that one channel buys. That
+# is the whole reason BCS's queue switches default off: the pair only isolates
+# re-selection while nothing else is switched on underneath it.
 #
 # EDF and CATS still take their channel from the config (index 0). For EDF that
 # is the definition of its rung: with no channel knowledge it has nothing to
@@ -621,7 +648,24 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 #
 # They are deliberately not read against CATS, which also picks its power and
 # its channel differently; the only clean isolation of these two policies on
-# this figure is within the LCS family.
+# this figure is within a family.
+#
+# BCS carries the same 2x2 (BCS_5W, BCS_FEAS_5W, BCS_DROP_5W, BCS_FULL_5W), so
+# the two policies are measured over two different channel rules rather than
+# one — a policy that only helps a scheduler walking a static ladder is a
+# different claim from one that helps whatever the channel rule is. ⚠️ The
+# corner that keeps the plain name differs between the two families: BCS_5W is
+# the *bare* scheduler because BCS defaults both switches off, while LCS_5W is
+# the *full* one because LCS defaults both on. The legends spell this out
+# ("BCS, selection only" against "LCS, full"); the labels do not.
+#
+# ⚠️ At 13 entries this roster is past tab10, so _draw_scenario_panel draws it
+# on tab20 and every curve is recoloured relative to a 10-entry figure. It is
+# also exactly the length of the linestyle and marker lists, so one more entry
+# makes two curves share a style unless those lists grow with it. If the
+# panels get unreadable, the ablation corners are what to move out — they are
+# a policy study, and cats_comparison is the precedent for giving one its own
+# mode and its own figures.
 #
 # Only CHEDF is carried at both powers, since 10 W vs 25 W is the comparison
 # that matters for a scheduler that spends its power under a retransmission
@@ -639,6 +683,9 @@ SCHEDULERS = [
     ("LCS_DROP_5W",   BASE_LCS_DROP_SCHEDULER),
     ("LCS_5W",        BASE_LCS_SCHEDULER),
     ("BCS_5W",        BASE_BCS_SCHEDULER),
+    ("BCS_FEAS_5W",   BASE_BCS_FEAS_SCHEDULER),
+    ("BCS_DROP_5W",   BASE_BCS_DROP_SCHEDULER),
+    ("BCS_FULL_5W",   BASE_BCS_FULL_SCHEDULER),
     ("CATS",          BASE_CATS_SCHEDULER),
 ]
 

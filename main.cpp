@@ -222,10 +222,17 @@ int main(int argc, char* argv[])
         /* How many of the channels it works with, best long-run mean first.
            Absent or 0 means all of them; a smaller number narrows the set, so
            fewer slots go on probing channels it is unlikely to pick. */
+        /* Both queue policies default *off* here, unlike on LCS below, where
+           they default on. The plain form of this scheduler is the
+           channel-re-selection baseline, so a policy switched on by default
+           would become part of every gap measured against it; a config that
+           wants one says so. */
         scheduler = std::make_unique<BCS_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["belief_threshold"],
             sched_cfg.value("n_usable", std::size_t{0}),
+            sched_cfg.value("early_drop", false),
+            sched_cfg.value("urgency_check", false),
             &buffer,
             system_tick,
             std::move(sched_channels)
