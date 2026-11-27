@@ -6,15 +6,13 @@
 #include "schedulers/policies/channel_choice.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 #include "schedulers/policies/feasibility.hpp"
-#include "schedulers/policies/urgency.hpp"
 
 BCS_scheduler::BCS_scheduler(unsigned int tx_power, float belief_threshold,
-                             std::size_t n_usable, bool early_drop, bool urgency_check,
+                             std::size_t n_usable, bool early_drop,
                              BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                              std::vector<channel_estimate_t> channels):
     BaseScheduler(buffer, sys_tick, std::move(channels)), tx_power(tx_power),
-    early_drop(early_drop), urgency_check(urgency_check),
-    belief_threshold(belief_threshold)
+    early_drop(early_drop), belief_threshold(belief_threshold)
 {
     this->usable_channels = rank_channels_by_mean(this->get_channels(), this->tx_power);
 
@@ -99,10 +97,8 @@ scheduled_frame_t BCS_scheduler::do_schedule_frame(void)
         classify_feasibility(*this->buffer_packet, *(this->system_tick),
                              transmission_prob);
 
-    /* Classify always, remove only when asked. Keeping those two apart is what
-       stops a packet that is past saving from arriving in the urgent set by
-       the back door when dropping is off, so the two switches stay
-       independent. */
+    /* Classify always, remove only when asked: the switch governs what leaves
+       the buffer and never which packets the classification picks out. */
     if (this->early_drop)
     {
         for (const auto& [id, id_count] : feasibility.infeasible)
@@ -112,11 +108,9 @@ scheduled_frame_t BCS_scheduler::do_schedule_frame(void)
         }
     }
 
-    const bool may_listen = listening_affordable(feasibility, this->urgency_check);
-
     const int stale = this->stalest_channel();
 
-    if (stale >= 0 && may_listen)
+    if (stale >= 0)
     {
         /* Refresh before transmitting. Nothing is assigned to belief here: the
            ageing above and receive_state() are the only two things that move
@@ -129,13 +123,11 @@ scheduled_frame_t BCS_scheduler::do_schedule_frame(void)
         return scheduled_frame;
     }
 
-    /* The channel and its rho_hat_{c,j}(t) were decided above. That estimate
-       is read off the label last observed there, or off the channel's fitted
-       stationary statistics if it has never been observed -- reachable here
-       only with the urgency check on, which is what can send the radio past a
-       refresh it wanted. Without it, every belief is above the threshold by
-       the time this line runs and an unobserved channel, sitting at belief 0,
-       would have been probed first. */
+    /* The channel and its rho_hat_{c,j}(t) were decided above, and the label
+       they are read off is always one this scheduler still believes: the
+       refresh above is unconditional, so every belief is above the threshold
+       by the time this line runs. A never-observed channel sits at belief 0
+       and so cannot be reached here -- it was probed first. */
     scheduled_frame.channel = chosen;
 
     packet_t* next = select_earliest_deadline(*this->buffer_packet);
@@ -197,10 +189,10 @@ std::string BCS_scheduler::get_name() const {
        otherwise all write to the one file. The full set keeps the plain name.
 
        A name encodes a *deviation from this scheduler's defaults*, which is
-       why a switched-on queue policy is spelled out here while the schedulers
-       that run those policies by default spell out a switched-off one
-       instead. Either way the plain name belongs to the plain scheduler and a
-       variant cannot overwrite its log. */
+       why a switched-on queue policy is spelled out here while a scheduler
+       that runs that policy by default spells out a switched-off one instead.
+       Either way the plain name belongs to the plain scheduler and a variant
+       cannot overwrite its log. */
     const std::string power = std::to_string(this->tx_power) + "W";
 
     std::string name = this->usable_channels.size() == this->n_channels()
@@ -208,8 +200,7 @@ std::string BCS_scheduler::get_name() const {
                        : "TCS" + std::to_string(this->usable_channels.size())
                          + "_" + power;
 
-    if (this->early_drop)    name += "_drop";
-    if (this->urgency_check) name += "_urg";
+    if (this->early_drop) name += "_drop";
 
     return name;
 }

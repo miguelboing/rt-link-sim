@@ -27,8 +27,9 @@ someone has to remember.
 spare a slot is one question; whether a packet is about to miss its deadline is
 another, and only the second is a fact about the queue. Keeping them apart is
 what lets a scheduler read the classification without being committed to any
-particular way of resolving it, which is exactly the difference between the
-listening rules of the schedulers that ship here.
+particular way of resolving it — which is what the shipped schedulers differ
+on, and the reason it stays here on one caller: every other scheduler that
+classifies its queue resolves the question by listening anyway.
 
 **Not here:**
 

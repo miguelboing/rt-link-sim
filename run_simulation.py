@@ -32,10 +32,10 @@ TESTS_DIR = "tests"
 # its own.
 #
 # `four-channels-bcs-lcs` runs the same four channels as `four-channel` but a
-# different question: not which scheduler wins, but what the two queue policies
-# (early dropping and the feasibility-driven listening gate) are each worth,
-# over both channel rules. It is a mode rather than extra curves because eight
-# ablation corners on the comparison figure made it a figure about switches.
+# different question: not which scheduler wins, but what early dropping is
+# worth, under both channel rules. It is a mode rather than extra curves
+# because ablation corners on the comparison figure made it a figure about
+# switches.
 MODES = ("single-channel", "four-channel", "four-channels-bcs-lcs", "tests")
 
 # ── Figure style and paper symbols ────────────────────────────────────────────
@@ -273,23 +273,19 @@ BASE_CHARM_SCHEDULER_25W = dict(BASE_CHARM_SCHEDULER, tx_power=25)
 # exactly, which is the one use the knob still earns: a cross-check between two
 # classes that should agree.
 #
-# The two queue switches are spelled out here as well, and for BCS they are
-# **off** — the opposite default from LCS, and the C++ side agrees. Plain BCS
-# is the channel-re-selection baseline: what it is read against differs from it
-# in which channel each slot goes to and nothing else, so a queue policy
-# switched on underneath would quietly join that gap. The three variants below
-# turn them on, and `get_name()` spells out a switched-*on* policy (`BCS_5W_drop`,
-# `BCS_5W_urg`, `BCS_5W_drop_urg`) because a name encodes the deviation from
-# its own scheduler's defaults — which is why the same two switches are
-# written the other way round on LCS.
+# The queue switch is spelled out here as well, and for BCS it is **off** —
+# the opposite default from LCS, and the C++ side agrees. Plain BCS is the
+# channel-re-selection baseline: what it is read against differs from it in
+# which channel each slot goes to and nothing else, so a queue policy switched
+# on underneath would quietly join that gap. The variant below turns it on, and
+# `get_name()` spells out a switched-*on* policy (`BCS_5W_drop`) because a name
+# encodes the deviation from its own scheduler's defaults — which is why the
+# same switch is written the other way round on LCS.
 BASE_BCS_SCHEDULER     = {"type": "BCS", "tx_power": 5, "belief_threshold": 0.7,
-                          "early_drop": False, "urgency_check": False}
+                          "early_drop": False}
 BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
 
-BASE_BCS_FEAS_SCHEDULER = dict(BASE_BCS_SCHEDULER, urgency_check=True)
-BASE_BCS_DROP_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True)
-BASE_BCS_FULL_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True,
-                               urgency_check=True)
+BASE_BCS_FULL_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True)
 
 # LCS walks a ladder of the channels ranked by long-run mean: it holds the
 # highest rung it can, listens one rung down before ever moving to a worse
@@ -298,36 +294,26 @@ BASE_BCS_FULL_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True,
 # channel knowledge: it re-chooses the channel, but one rung at a time and
 # along an ordering fixed before the run.
 #
-# On top of the ladder it runs the two queue policies CATS runs: it drops
-# packets that can no longer make their deadline, and it declines to listen on
-# a slot some packet needs at exactly that moment. Both are spelled out rather
-# than left to the C++ defaults so `experiment_params.json` records what ran,
-# and both switch off independently for an ablation — the C++ `get_name()`
-# encodes a switched-off policy, so an arm cannot overwrite the full
-# scheduler's logs.
+# On top of the ladder it drops packets that can no longer make their
+# deadline, the one queue policy it shares with CATS. It is spelled out rather
+# than left to the C++ default so `experiment_params.json` records what ran,
+# and it switches off for an ablation — the C++ `get_name()` encodes a
+# switched-off policy, so the arm cannot overwrite the full scheduler's logs.
 BASE_LCS_SCHEDULER     = {"type": "LCS", "tx_power": 5, "belief_threshold": 0.7,
-                          "early_drop": True, "urgency_check": True}
+                          "early_drop": True}
 BASE_LCS_SCHEDULER_25W = dict(BASE_LCS_SCHEDULER, tx_power=25)
 
-# The other three corners of the 2x2, all on the four-channel figure beside the
-# full scheduler: the bare ladder with neither queue policy, and the two arms
-# that add exactly one of them. Every pair that differs in one switch is a
-# clean isolation of that switch — LADDER→FEAS and DROP→LCS are both "what the
-# feasibility check does", LADDER→DROP and FEAS→LCS are both "what early
-# dropping does" — and having both readings of each is what shows whether the
-# two policies interact (they do: the urgency check is what makes the channel
-# decision depend on the queue at all).
+# The other corner: the bare ladder, with nothing on top of it. The pair
+# differs in one switch, so the gap between the two curves is early dropping
+# and the task-set draw and nothing else.
 #
 # ⚠️ The roster label names what an arm *has* and the C++ `get_name()` names
-# what it *lacks*, so these two write `LCS_5W_nodrop` and `LCS_5W_nourg`
-# scheduled-packet logs respectively. The spellings are deliberately not the
-# same word — a log named after the switch that is off cannot be confused with
-# a roster label asserting the switch that is on — but it does mean the log
-# file for `LCS_FEAS_5W` is not called that.
-BASE_LCS_LADDER_SCHEDULER = dict(BASE_LCS_SCHEDULER, early_drop=False,
-                                 urgency_check=False)
-BASE_LCS_FEAS_SCHEDULER   = dict(BASE_LCS_SCHEDULER, early_drop=False)
-BASE_LCS_DROP_SCHEDULER   = dict(BASE_LCS_SCHEDULER, urgency_check=False)
+# what it *lacks*, so this one writes `LCS_5W_nodrop` scheduled-packet logs.
+# The spellings are deliberately not the same word — a log named after the
+# switch that is off cannot be confused with a roster label asserting the
+# switch that is on — but it does mean the log file for `LCS_LADDER_5W` is not
+# called that.
+BASE_LCS_LADDER_SCHEDULER = dict(BASE_LCS_SCHEDULER, early_drop=False)
 
 # The three ablation switches are spelled out rather than left to the C++
 # defaults so `experiment_params.json` records what a run actually used. All
@@ -426,8 +412,6 @@ _SCEN_SYMBOLS = {"U": SYM_U, "n": SYM_N, "L": SYM_L, "RR": SYM_RR}
 _POWER_SYMBOLS = {"EDF": SYM_PFP, "RM": SYM_PFP,
                   "CHEDF": SYM_PCH, "CHARM": SYM_PCH, "SCS": SYM_PCH,
                   "BCS": SYM_PCH, "LCS": SYM_PCH, "LCS_LADDER": SYM_PCH,
-                  "LCS_FEAS": SYM_PCH, "LCS_DROP": SYM_PCH,
-                  "BCS_FEAS": SYM_PCH, "BCS_DROP": SYM_PCH,
                   "BCS_FULL": SYM_PCH}
 
 # Legend forms for the cats_comparison ablation labels. The raw labels key the
@@ -437,10 +421,10 @@ _POWER_SYMBOLS = {"EDF": SYM_PFP, "RM": SYM_PFP,
 # fixed-power variant still gets its power appended in the usual parenthesis.
 # Every CATS entry names only what differs from full CATS — adaptive power,
 # early dropping and the urgency check are all on unless the name says
-# otherwise. The LCS entries read the other way round, naming the one policy an
-# arm has, because two of the three are arms rather than the default; plain
-# `LCS` is spelled out as "full" so an unqualified LCS curve on the same axis
-# as its arms cannot be read as the bare ladder.
+# otherwise. The LCS and BCS entries read the other way round, naming what the
+# arm is rather than what it is missing; plain `LCS` is spelled out as "full"
+# so an unqualified LCS curve on the same axis as the bare ladder cannot be
+# read as the ladder itself.
 _ABLATION_TITLES = {
     "CATS_FULL":         "CATS, full",
     "CATS_FIX_DROP":     "CATS, fixed power",
@@ -449,11 +433,7 @@ _ABLATION_TITLES = {
     "CATS_NOURG":        "CATS, no urgency check",
     "LCS":               "LCS, full",
     "LCS_LADDER":        "LCS, ladder only",
-    "LCS_FEAS":          "LCS, feasibility check only",
-    "LCS_DROP":          "LCS, early drop only",
     "BCS":               "BCS, selection only",
-    "BCS_FEAS":          "BCS, feasibility check only",
-    "BCS_DROP":          "BCS, early drop only",
     "BCS_FULL":          "BCS, full",
 }
 
@@ -596,23 +576,23 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 #   SCS_5W         none                5 W       static, incl. ch.   best mean no
 #   CHEDF_5W       belief, one ch      5 W       refreshed estimate  best mean no
 #   CHEDF_25W      belief, one ch     25 W       refreshed estimate  best mean no
-#   LCS_5W         belief + urgency    5 W       refreshed estimate  ladder    yes
-#   BCS_FULL_5W    belief + urgency    5 W       refreshed estimate  per slot  yes
+#   LCS_5W         belief              5 W       refreshed estimate  ladder    yes
+#   BCS_FULL_5W    belief              5 W       refreshed estimate  per slot  yes
 #   CATS           belief + urgency   adaptive   refreshed estimate  config    yes
 #
 # ⚠️ The LCS/BCS pair is the point of this roster, and both are carried in
-# their *full* form — every queue policy on — so the gap between them is the
+# their *full* form — early dropping on — so the gap between them is the
 # channel rule alone: a mean-ordered ladder walked a rung at a time against a
 # free choice among all four channels every slot. CHEDF is the same belief
 # rule committed to one channel, so CHEDF→LCS→BCS_FULL reads as a progression
 # in how freely the channel is chosen, and the gap from SCS is what refreshing
 # the estimate of that one channel buys.
 #
-# ⚠️ CHEDF carries neither queue policy, so a CHEDF→BCS_FULL gap is channel
-# re-selection *plus* early dropping *plus* the urgency check, not re-selection
-# alone as it was while BCS ran bare here. What each of those policies is worth
-# is the `four-channels-bcs-lcs` mode's question, measured there over both
-# channel rules at once, which is why this figure does not need to answer it.
+# ⚠️ CHEDF drops nothing early, so a CHEDF→BCS_FULL gap is channel
+# re-selection *plus* early dropping, not re-selection alone as it was while
+# BCS ran bare here. What early dropping is worth on its own is the
+# `four-channels-bcs-lcs` mode's question, measured there over both channel
+# rules at once, which is why this figure does not need to answer it.
 #
 # EDF and CATS still take their channel from the config (index 0). For EDF that
 # is the definition of its rung: with no channel knowledge it has nothing to
@@ -626,21 +606,20 @@ BASE_SCS_SCHEDULER_25W = dict(BASE_SCS_SCHEDULER, tx_power=25)
 # each slot, and a refreshed estimate with the power chosen from it.
 #
 # "belief" is the shared rule: belief in the last prediction decays at the
-# channel's mixing rate and a listen restores it. LCS, BCS_FULL and CATS
-# additionally refuse to listen while a packet is near its deadline; CHEDF
-# listens on belief alone, so a listen there can consume a slot an urgent
-# packet needed.
+# channel's mixing rate and a listen restores it. CATS additionally refuses to
+# listen while a packet is near its deadline; CHEDF, LCS and BCS listen on
+# belief alone, so a listen there can consume a slot an urgent packet needed.
 #
 # Early dropping — discarding a packet whose remaining slots cannot cover its
 # reliability target — is done by LCS, BCS and CATS, and on all three it is a
-# switch (`early_drop`, with `urgency_check` beside it) rather than something
-# built in. ⚠️ The defaults differ: both switches default on for LCS and CATS
-# and off for BCS, which is why the full BCS has to be named
-# (BASE_BCS_FULL_SCHEDULER) while the full LCS is the plain dict. EDF, SCS and
-# CHEDF drop nothing early; the buffer's deadline expiry is a different thing.
+# switch (`early_drop`) rather than something built in. ⚠️ The defaults
+# differ: it is on for LCS and CATS and off for BCS, which is why the full BCS
+# has to be named (BASE_BCS_FULL_SCHEDULER) while the full LCS is the plain
+# dict. EDF, SCS and CHEDF drop nothing early; the buffer's deadline expiry is
+# a different thing.
 #
-# What those two policies are each worth is deliberately *not* asked here: the
-# eight corners that answer it are the `four-channels-bcs-lcs` mode's roster,
+# What early dropping is worth on its own is deliberately *not* asked here: the
+# four corners that answer it are the `four-channels-bcs-lcs` mode's roster,
 # BCS_LCS_SCHEDULERS below. Keeping them out is what holds this figure at seven
 # curves — within tab10, one style each — and keeps it a comparison of
 # schedulers rather than of switches.
@@ -662,19 +641,16 @@ SCHEDULERS = [
 ]
 
 # The roster of the `four-channels-bcs-lcs` mode: the two channel-choosing
-# schedulers at all four settings of their two queue switches, and nothing
-# else. It is a policy study, so it is a mode of its own rather than eight more
-# curves on the figure above — the same reasoning that gives the CATS ablation
-# its own case, and the reason that figure stays at seven readable curves.
+# schedulers with early dropping off and on, and nothing else. It is a policy
+# study, so it is a mode of its own rather than four more curves on the figure
+# above — the same reasoning that gives the CATS ablation its own case, and the
+# reason that figure stays at seven readable curves.
 #
-# Read it two ways. Down a family, each pair differing in one switch isolates
-# that switch, and both readings of a switch exist (LADDER->FEAS and
-# DROP->LCS are both the feasibility check), so a disagreement between the two
-# readings is the interaction between the policies. Across the families, the
-# same corner under two channel rules says whether a policy's effect depends
-# on how the channel is chosen — a policy that only pays off for a scheduler
-# walking a static ladder is a different finding from one that pays off
-# whatever the channel rule is.
+# Read it two ways. Down a family, the pair isolates early dropping under one
+# channel rule. Across the families, the same corner under two channel rules
+# says whether the policy's effect depends on how the channel is chosen — a
+# policy that only pays off for a scheduler walking a static ladder is a
+# different finding from one that pays off whatever the channel rule is.
 #
 # ⚠️ The plain-named corner is not the same corner in the two families. BCS_5W
 # is the *bare* scheduler and LCS_5W is the *full* one, because the C++
@@ -682,12 +658,8 @@ SCHEDULERS = [
 # the labels do not.
 BCS_LCS_SCHEDULERS = [
     ("LCS_LADDER_5W", BASE_LCS_LADDER_SCHEDULER),
-    ("LCS_FEAS_5W",   BASE_LCS_FEAS_SCHEDULER),
-    ("LCS_DROP_5W",   BASE_LCS_DROP_SCHEDULER),
     ("LCS_5W",        BASE_LCS_SCHEDULER),
     ("BCS_5W",        BASE_BCS_SCHEDULER),
-    ("BCS_FEAS_5W",   BASE_BCS_FEAS_SCHEDULER),
-    ("BCS_DROP_5W",   BASE_BCS_DROP_SCHEDULER),
     ("BCS_FULL_5W",   BASE_BCS_FULL_SCHEDULER),
 ]
 
@@ -2604,7 +2576,7 @@ if __name__ == "__main__":
 
     if mode == "four-channels-bcs-lcs":
         warn_window_k(SWEEP_SCENARIOS)
-        print(f"Running BCS/LCS queue-policy comparison on "
+        print(f"Running BCS/LCS early-dropping comparison on "
               f"{', '.join(c['name'] for c in BASE_CHANNELS)} "
               f"({n_runs} runs/point, {n_workers} workers, "
               f"window_k={BASE_SIM.get('window_k', 100)})")
@@ -2614,10 +2586,10 @@ if __name__ == "__main__":
         # make two runs' outputs indistinguishable by filename alone.
         results = run_sweep(n_runs, n_workers, schedulers=BCS_LCS_SCHEDULERS)
         plot_schedulability(results, basename="results_bcs_lcs",
-                            title=f"BCS and LCS queue policies"
+                            title=f"BCS and LCS early dropping"
                                   f"{_window_k_suffix()}")
         plot_channel_usage(results, basename="results_bcs_lcs_channels",
-                           title="Channel usage — BCS and LCS queue policies")
+                           title="Channel usage — BCS and LCS early dropping")
         print(f"\nTotal elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 

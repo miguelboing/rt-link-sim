@@ -26,23 +26,23 @@
         estimate -- same curve, same believed state -- and then the better bet
         is the one more recently confirmed, so the higher belief wins.
 
-   Two queue policies sit on top of that, both **off unless a config asks for
-   them**, which is the opposite default from the other schedulers that carry
-   them:
+   One queue policy sits on top of that, **off unless a config asks for it**,
+   which is the opposite default from the other schedulers that carry it:
 
      - *early_drop* removes a packet whose remaining slots can no longer cover
        its reliability target, handing those slots to the packets that can
        still make it.
-     - *urgency_check* gates rule 1: a slot is not given up to a refresh while
-       some packet has exactly enough slots left to make its deadline, so the
-       radio transmits on an estimate it distrusts rather than spend that
-       packet's last chance listening.
 
-   They are off by default because this scheduler's plain form is the
+   It is off by default because this scheduler's plain form is the
    channel-re-selection baseline -- what it is measured against differs from it
    in *which channel each slot is spent on* and nothing else, and a queue
    policy switched on underneath would quietly become part of that gap.
-   Switching either on produces a variant, and the variant says so in its name.
+   Switching it on produces a variant, and the variant says so in its name.
+
+   Listening is unconditional: a channel whose estimate has decayed past the
+   threshold gets the slot however close a queued packet is to its deadline.
+   So the channel decision never reads the queue, which is what keeps a gap
+   measured against this scheduler attributable to where its slots went.
 
    Retransmission is the published accumulated-probability rule: a frame is
    repeated until the probability that at least one of its copies was decoded
@@ -64,7 +64,7 @@ class BCS_scheduler : public BaseScheduler
 {
 public:
     BCS_scheduler(unsigned int tx_power, float belief_threshold,
-                  std::size_t n_usable, bool early_drop, bool urgency_check,
+                  std::size_t n_usable, bool early_drop,
                   BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                   std::vector<channel_estimate_t> channels);
 
@@ -73,10 +73,6 @@ public:
     /* When true, packets that can no longer make their deadline are removed.
        They are classified either way, so this governs the removal only. */
     bool early_drop;
-
-    /* When true, a slot is not given up for listening while some packet has
-       exactly enough slots left to make its deadline. */
-    bool urgency_check;
 
     /* Belief in the label last heard on each channel, and the floor below
        which this scheduler gives up a slot to refresh one. */

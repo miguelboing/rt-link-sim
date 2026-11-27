@@ -219,20 +219,27 @@ int main(int argc, char* argv[])
             std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
                          " the `channel` field in the config is ignored." << std::endl;
 
+        /* It listens whenever an estimate has gone stale, so there is no
+           urgency term to switch. An older config still carrying one would
+           otherwise be read as having run a policy that is no longer there. */
+        if (sched_cfg.contains("urgency_check"))
+            std::cerr << "WARNING: " << sched_type << " listens on belief alone;"
+                         " the `urgency_check` field in the config is ignored."
+                      << std::endl;
+
         /* How many of the channels it works with, best long-run mean first.
            Absent or 0 means all of them; a smaller number narrows the set, so
            fewer slots go on probing channels it is unlikely to pick. */
-        /* Both queue policies default *off* here, unlike on LCS below, where
-           they default on. The plain form of this scheduler is the
+        /* Early dropping defaults *off* here, unlike on LCS below, where it
+           defaults on. The plain form of this scheduler is the
            channel-re-selection baseline, so a policy switched on by default
            would become part of every gap measured against it; a config that
-           wants one says so. */
+           wants it says so. */
         scheduler = std::make_unique<BCS_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["belief_threshold"],
             sched_cfg.value("n_usable", std::size_t{0}),
             sched_cfg.value("early_drop", false),
-            sched_cfg.value("urgency_check", false),
             &buffer,
             system_tick,
             std::move(sched_channels)
@@ -247,13 +254,19 @@ int main(int argc, char* argv[])
             std::cerr << "WARNING: " << sched_type << " chooses its own channel;"
                          " the `channel` field in the config is ignored." << std::endl;
 
-        /* Both policies default on: a config that names neither gets the full
-           scheduler, and an ablation arm is the one that has to say so. */
+        /* Both of its listening steps are taken whenever an estimate has gone
+           stale, so there is no urgency term to switch. */
+        if (sched_cfg.contains("urgency_check"))
+            std::cerr << "WARNING: " << sched_type << " listens on belief alone;"
+                         " the `urgency_check` field in the config is ignored."
+                      << std::endl;
+
+        /* Early dropping defaults on: a config that does not name it gets the
+           full scheduler, and the bare ladder is what has to say so. */
         scheduler = std::make_unique<LCS_scheduler>(
             sched_cfg["tx_power"],
             sched_cfg["belief_threshold"],
             sched_cfg.value("early_drop", true),
-            sched_cfg.value("urgency_check", true),
             &buffer,
             system_tick,
             std::move(sched_channels)
