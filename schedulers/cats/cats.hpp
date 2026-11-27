@@ -5,6 +5,7 @@
 
 #include "schedulers/base_scheduler.hpp"
 #include "schedulers/policies/belief_tracker.hpp"
+#include "schedulers/policies/power_tier.hpp"
 #include "packet_generators/base_packet_generator.hpp"
 #include <unordered_map>
 
@@ -33,10 +34,6 @@
 class CATS_scheduler : public BaseScheduler
 {
 public:
-    /* Predictor tiers, low to high. Indices into transmission_prob. */
-    static constexpr unsigned int N_POWERS = 3U;
-    static constexpr unsigned int POWER_LEVELS[N_POWERS] = {1U, 10U, 25U};
-
     CATS_scheduler(std::size_t channel,
                    float belief_threshold,
                    double utilization_threshold,
@@ -60,7 +57,7 @@ public:
        selection loop considers only that tier and update_power_cap() leaves
        the cap alone, so p_best is that tier's probability too. */
     bool adaptive_power;
-    unsigned int fixed_power_idx;   /* index into POWER_LEVELS; unused when adaptive */
+    unsigned int fixed_power_idx;   /* index into POWER_TIERS; unused when adaptive */
 
     /* When false, packets classified infeasible stay in the buffer until the
        deadline expires or the reliability rule retires them. Classification
@@ -106,15 +103,6 @@ public:
 
     std::string get_name() const override;
 
-    /* Demand in slots within the horizon H, given a per-frame success
-       probability p. Demand_i = ceil(H/T_i) * C_i * retx_count_required(p, RR_i).
-       Returns +inf if any task is infeasible at p. */
-    double compute_demand_slots(double p) const;
-
-    /* Utilization U = compute_demand_slots(p) / H. Returns +inf if infeasible,
-       0.0 when there are no periodic tasks. */
-    double compute_utilization(double p) const;
-
 private:
     /* rho_hat_{c,j}(t) at tier j on the channel this scheduler transmits on.
        Derived from the label last observed there, so the three tiers always
@@ -124,7 +112,7 @@ private:
        stationary average, so no tier ever reads as flatly impossible. */
     double prob_at(unsigned int j) const
     {
-        return this->rho_hat(this->channel, POWER_LEVELS[j]);
+        return this->rho_hat(this->channel, POWER_TIERS[j]);
     }
 
     /* Slack-aware power cap, recomputed whenever the estimates move: the

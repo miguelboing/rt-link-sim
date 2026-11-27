@@ -5,8 +5,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include "packet_generators/base_packet_generator.hpp"
 #include "schedulers/base_scheduler.hpp"
 #include "schedulers/policies/belief_tracker.hpp"
+#include "schedulers/policies/power_tier.hpp"
 
 /* LCS -- "Ladder Channel Selection".
 
@@ -72,21 +74,64 @@
    read for nothing else.
 
    Retransmission is the accumulated-probability rule, sized from the seat's
-   current decode estimate. Power is fixed. Queue order is by deadline. */
+   current decode estimate. Queue order is by deadline.
+
+   Power is fixed unless *adaptive_power* is asked for, in which case it is
+   CATS's two-part rule (`policies/power_tier.hpp`) over the ladder:
+
+     - a *cap*, the lowest tier whose predicted utilization of the known task
+       set fits under utilization_threshold. The probability a tier offers is
+       the seat's at that tier, because the seat is where this scheduler
+       transmits -- it cannot reach a better rung this slot without first
+       giving a slot up to listen, so the seat is what a tier can actually
+       deliver.
+     - a *per-frame choice*, the cheapest tier at or below the cap whose
+       decode estimate on the seat finishes the frame; if none does, the cap
+       tier is spent and the frame comes back next slot.
+
+   The cap is also the power the ladder is walked at -- the estimates, the
+   holding bar and the descent bar are all read at it, since it is the most
+   this scheduler will spend. The ladder's *order* is not: it is fixed at
+   construction, so the rungs cannot be reshuffled underneath a seat by the
+   cap moving. */
 class LCS_scheduler : public BaseScheduler
 {
 public:
     LCS_scheduler(unsigned int tx_power, float belief_threshold,
                   bool early_drop,
+                  bool adaptive_power, double utilization_threshold,
+                  const std::vector<periodic_task_t>& periodic_tasks,
                   BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                   std::vector<channel_estimate_t> channels);
 
+    /* The one power every transmission goes out at while adaptive_power is
+       off. Not required to be a predictor tier -- the decode estimate is read
+       off the fitted curve at whatever power this is, so the scheduler still
+       sizes its retransmissions from the power it transmits at. */
     unsigned int tx_power;
 
     /* When false, packets that can no longer make their deadline stay in the
        buffer until it expires them. They are classified either way, so this
        governs the removal and nothing else. */
     bool early_drop;
+
+    /* When true, the power of each transmission is chosen per frame from the
+       predictor tiers, under a cap set by the task set's predicted
+       utilization. When false, every transmission is tx_power and no cap
+       exists. */
+    bool adaptive_power;
+
+    /* The utilization the cap policy keeps the schedule under, and the
+       a-priori task set and horizon it measures that against. All three are
+       read only while adaptive_power is on. */
+    double utilization_threshold;
+    std::vector<periodic_task_t> periodic_tasks;
+    unsigned int horizon_H;
+
+    /* The highest tier currently permitted, as an index into POWER_TIERS.
+       Starts at the top, so behaviour before the first observation is the
+       scheduler's most capable rather than its cheapest. */
+    unsigned int max_power_idx;
 
     /* Belief in the label last heard on each channel, and the floor below
        which an estimate stops counting as something this scheduler knows. */
@@ -133,11 +178,26 @@ private:
        believed, or -1 when the whole watch list is fresh. */
     int rung_to_refresh(void) const;
 
-    /* The best seat the believed estimates support: the rung with the highest
-       decode estimate among the watch list and any fresh rung below it. */
-    std::size_t best_seat(void) const;
+    /* The best seat the believed estimates support at `power`: the rung with
+       the highest decode estimate among the watch list and any fresh rung
+       below it. */
+    std::size_t best_seat(unsigned int power) const;
 
-    /* The value a rung below the seat has to beat for the seat to be given
-       up: the better of its long-run mean and its last believed estimate. */
-    double bar_to_beat(std::size_t c) const;
+    /* The value a rung below the seat has to beat at `power` for the seat to
+       be given up: the better of its long-run mean and its last believed
+       estimate. */
+    double bar_to_beat(std::size_t c, unsigned int power) const;
+
+    /* The power every decision this slot is taken at: the cap while power is
+       adaptive, the fixed power otherwise. One accessor, so no decision in a
+       slot can read a different power than the others. */
+    unsigned int ref_power(void) const
+    {
+        return this->adaptive_power ? POWER_TIERS[this->max_power_idx]
+                                    : this->tx_power;
+    }
+
+    /* Re-run the slack policy from the seat's estimates. No-op while power is
+       fixed, where there is no cap to move. */
+    void update_power_cap(void);
 };

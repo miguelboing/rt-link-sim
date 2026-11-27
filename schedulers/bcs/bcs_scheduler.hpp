@@ -5,8 +5,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include "packet_generators/base_packet_generator.hpp"
 #include "schedulers/base_scheduler.hpp"
 #include "schedulers/policies/belief_tracker.hpp"
+#include "schedulers/policies/power_tier.hpp"
 
 /* BCS -- "Belief-driven Channel Selection".
 
@@ -47,7 +49,26 @@
    Retransmission is the published accumulated-probability rule: a frame is
    repeated until the probability that at least one of its copies was decoded
    clears its per-frame requirement, sized from the chosen channel's current
-   decode estimate. Power is fixed.
+   decode estimate.
+
+   Power is fixed unless *adaptive_power* is asked for, in which case it is
+   CATS's two-part rule (`policies/power_tier.hpp`) over this scheduler's own
+   channel set:
+
+     - a *cap*, the lowest tier whose predicted utilization of the known task
+       set fits under utilization_threshold. The probability a tier offers is
+       the best any usable channel offers at it, because this scheduler is free
+       to transmit wherever it likes each slot -- so the question "does the work
+       fit at this tier" is asked of the best channel the tier can reach, not
+       of one fixed channel.
+     - a *per-frame choice*, the cheapest tier at or below the cap whose decode
+       estimate on the chosen channel finishes the frame; if none does, the cap
+       tier is spent and the frame comes back next slot.
+
+   The cap is also the power the channel comparison and the queue costing are
+   done at, since it is the most this scheduler will spend: ranking channels at
+   a power it would never use would pick the channel that is best under a
+   budget it does not have.
 
    Belief is per channel and per state: it is 1 the slot after that channel was
    observed and decays by that state's A_ss on every slot since, so a channel
@@ -65,14 +86,38 @@ class BCS_scheduler : public BaseScheduler
 public:
     BCS_scheduler(unsigned int tx_power, float belief_threshold,
                   std::size_t n_usable, bool early_drop,
+                  bool adaptive_power, double utilization_threshold,
+                  const std::vector<periodic_task_t>& periodic_tasks,
                   BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                   std::vector<channel_estimate_t> channels);
 
+    /* The one power every transmission goes out at while adaptive_power is
+       off. Not required to be a predictor tier -- the decode estimate is read
+       off the fitted curve at whatever power this is, so the scheduler still
+       sizes its retransmissions from the power it transmits at. */
     unsigned int tx_power;
 
     /* When true, packets that can no longer make their deadline are removed.
        They are classified either way, so this governs the removal only. */
     bool early_drop;
+
+    /* When true, the power of each transmission is chosen per frame from the
+       predictor tiers, under a cap set by the task set's predicted
+       utilization. When false, every transmission is tx_power and no cap
+       exists. */
+    bool adaptive_power;
+
+    /* The utilization the cap policy keeps the schedule under, and the
+       a-priori task set and horizon it measures that against. All three are
+       read only while adaptive_power is on. */
+    double utilization_threshold;
+    std::vector<periodic_task_t> periodic_tasks;
+    unsigned int horizon_H;
+
+    /* The highest tier currently permitted, as an index into POWER_TIERS.
+       Starts at the top, so behaviour before the first observation is the
+       scheduler's most capable rather than its cheapest. */
+    unsigned int max_power_idx;
 
     /* Belief in the label last heard on each channel, and the floor below
        which this scheduler gives up a slot to refresh one. */
@@ -102,10 +147,17 @@ public:
 
     /* Record the observation, then restore belief in it. Only a label that was
        actually recorded counts as a refresh, so a listen that came back with
-       nothing leaves belief where it was and the channel stays due. */
+       nothing leaves belief where it was and the channel stays due.
+
+       The cap is re-run here and nowhere else, because this is the only thing
+       that moves what it is derived from: `rho_hat` is read off the last
+       label, so it changes when a label arrives and not as belief decays. */
     void receive_state(std::size_t c, int state) override
     {
-        if (BaseScheduler::observe_state(c, state)) this->belief.observed(c);
+        if (!BaseScheduler::observe_state(c, state)) return;
+
+        this->belief.observed(c);
+        this->update_power_cap();
     }
 
     std::string get_name() const override;
@@ -115,7 +167,25 @@ private:
        below the threshold, or -1 when every estimate is still trusted. */
     int stalest_channel(void) const;
 
-    /* The channel to transmit on: highest decode estimate at tx_power, ties
+    /* The channel to transmit on: highest decode estimate at `power`, ties
        broken by belief. */
-    std::size_t best_channel(void) const;
+    std::size_t best_channel(unsigned int power) const;
+
+    /* The power every decision this slot is taken at: the cap while power is
+       adaptive, the fixed power otherwise. One accessor, so no decision in a
+       slot can read a different power than the others. */
+    unsigned int ref_power(void) const
+    {
+        return this->adaptive_power ? POWER_TIERS[this->max_power_idx]
+                                    : this->tx_power;
+    }
+
+    /* The best decode estimate any usable channel offers at tier j -- what
+       this scheduler could achieve by spending that tier, since it is free to
+       transmit on any of them. The input the cap policy is asked for. */
+    double best_prob_at(unsigned int j) const;
+
+    /* Re-run the slack policy. No-op while power is fixed, where there is no
+       cap to move. */
+    void update_power_cap(void);
 };

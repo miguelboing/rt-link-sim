@@ -7,15 +7,33 @@
 #include "schedulers/policies/channel_choice.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 #include "schedulers/policies/feasibility.hpp"
+#include "schedulers/policies/power_tier.hpp"
 
 LCS_scheduler::LCS_scheduler(unsigned int tx_power, float belief_threshold,
                              bool early_drop,
+                             bool adaptive_power, double utilization_threshold,
+                             const std::vector<periodic_task_t>& periodic_tasks,
                              BufferPacket* buffer, std::shared_ptr<unsigned int> sys_tick,
                              std::vector<channel_estimate_t> channels):
     BaseScheduler(buffer, sys_tick, std::move(channels)), tx_power(tx_power),
-    early_drop(early_drop), belief_threshold(belief_threshold)
+    early_drop(early_drop), adaptive_power(adaptive_power),
+    utilization_threshold(utilization_threshold),
+    periodic_tasks(periodic_tasks),
+    horizon_H(task_hyperperiod(periodic_tasks)),
+    max_power_idx(TOP_POWER_TIER),
+    belief_threshold(belief_threshold)
 {
-    this->ladder = rank_channels_by_mean(this->get_channels(), this->tx_power);
+    /* The rungs are ordered by long-run mean at the highest power this
+       scheduler could ever transmit at. With power fixed that is the fixed
+       power; with power adaptive it is the top tier rather than the cap,
+       because the cap moves during the run and a ladder reshuffling under the
+       seat is not a ladder -- "the rung below" has to mean the same channel
+       from one slot to the next. */
+    const unsigned int rank_power = this->adaptive_power
+                                    ? POWER_TIERS[TOP_POWER_TIER]
+                                    : this->tx_power;
+
+    this->ladder = rank_channels_by_mean(this->get_channels(), rank_power);
 };
 
 int LCS_scheduler::rung_to_refresh(void) const
@@ -31,10 +49,10 @@ int LCS_scheduler::rung_to_refresh(void) const
     return -1;
 }
 
-std::size_t LCS_scheduler::best_seat(void) const
+std::size_t LCS_scheduler::best_seat(unsigned int power) const
 {
     std::size_t best     = 0U;
-    double      best_rho = this->rho_hat(this->ladder[0], this->tx_power);
+    double      best_rho = this->rho_hat(this->ladder[0], power);
 
     for (std::size_t r = 1; r < this->ladder.size(); ++r)
     {
@@ -44,7 +62,7 @@ std::size_t LCS_scheduler::best_seat(void) const
            ago, which is the one thing belief exists to stop. */
         if (r > this->seat && !this->trusted(this->ladder[r])) continue;
 
-        const double rho = this->rho_hat(this->ladder[r], this->tx_power);
+        const double rho = this->rho_hat(this->ladder[r], power);
 
         /* Strictly greater, so a tie keeps the higher rung: equal estimates
            mean equal information about this slot, and the better long-run mean
@@ -59,9 +77,9 @@ std::size_t LCS_scheduler::best_seat(void) const
     return best;
 }
 
-double LCS_scheduler::bar_to_beat(std::size_t c) const
+double LCS_scheduler::bar_to_beat(std::size_t c, unsigned int power) const
 {
-    const double mean = this->get_channels()[c].model.rho_bar(this->tx_power);
+    const double mean = this->get_channels()[c].model.rho_bar(power);
 
     /* The better of the two readings of the same channel: what it averages,
        and what it was last heard doing. The second only counts while it is
@@ -76,18 +94,58 @@ double LCS_scheduler::bar_to_beat(std::size_t c) const
        restricted to the watch list. */
     if (!this->trusted(c)) return mean;
 
-    return std::max(mean, this->rho_hat(c, this->tx_power));
+    return std::max(mean, this->rho_hat(c, power));
+}
+
+void LCS_scheduler::update_power_cap(void)
+{
+    /* With power fixed there is no cap: max_power_idx is never read, and
+       moving it would let the slack policy back into a scheduler that was
+       asked not to run it. */
+    if (!this->adaptive_power) return;
+
+    /* Asked of the seat, which is where a transmission this slot would go.
+       The rungs above may well be better, but reaching one costs a listening
+       slot first, so a tier that only fits because of a channel the radio is
+       not on would be a budget this scheduler cannot spend yet. The seat is
+       read as the slot opens, before the climb, for the same reason the queue
+       is. */
+    this->max_power_idx =
+        slack_power_cap(this->periodic_tasks, this->horizon_H,
+                        this->utilization_threshold,
+                        [this](unsigned int j)
+                        { return this->rho_hat(this->ladder[this->seat],
+                                               POWER_TIERS[j]); });
 }
 
 scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
 {
     scheduled_frame_t scheduled_frame;
-    scheduled_frame.transmission_power = this->tx_power;
+
+    /* With power fixed, every slot carries the one power. With power adaptive
+       nothing is committed until the transmit branch picks a tier, so the
+       field starts at zero rather than at whatever was on the stack. */
+    scheduled_frame.transmission_power = this->adaptive_power ? 0U : this->tx_power;
 
     /* One slot of belief decay, for every channel -- including the rungs this
        scheduler is not watching, since the chains they model keep mixing
        whether anything is listening or not. */
     this->belief.age(this->get_channels());
+
+    /* Re-run the slack policy before anything reads the cap, and from the seat
+       as the slot opens, so the cap and the queue are costed against the same
+       rung.
+
+       Once per slot, not once per observation as on a scheduler whose cap
+       depends on the labels alone: the seat is the other input and it moves
+       without any label arriving, so a cap refreshed only on an observation
+       would be a cap derived from a rung this scheduler has since left. */
+    this->update_power_cap();
+
+    /* Every decision below is taken at this power, so the ladder, the queue
+       costing and the transmission cannot disagree about what is being
+       spent. */
+    const unsigned int power = this->ref_power();
 
     /* Judge the queue at the decode estimate of the rung the radio is on as
        the slot opens -- the channel a transmission this slot would most likely
@@ -95,7 +153,7 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
        against. The seat may yet climb below, which makes this an estimate one
        slot behind on the slots a packet needs; that is the same lag any
        estimate-driven count carries. */
-    const double p_seat = this->rho_hat(this->ladder[this->seat], this->tx_power);
+    const double p_seat = this->rho_hat(this->ladder[this->seat], power);
 
     const feasibility_t feasibility =
         classify_feasibility(*this->buffer_packet, *(this->system_tick), p_seat);
@@ -129,11 +187,11 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
 
     /* Climb, or stay. Either way the seat is now the best rung the believed
        estimates support. */
-    this->seat = this->best_seat();
+    this->seat = this->best_seat(power);
 
     const std::size_t chosen = this->ladder[this->seat];
-    const double      rho    = this->rho_hat(chosen, this->tx_power);
-    const double      mean   = this->get_channels()[chosen].model.rho_bar(this->tx_power);
+    const double      rho    = this->rho_hat(chosen, power);
+    const double      mean   = this->get_channels()[chosen].model.rho_bar(power);
 
     if (rho < mean)
     {
@@ -151,7 +209,7 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
         {
             const std::size_t candidate = this->ladder[r];
 
-            if (rho >= this->bar_to_beat(candidate)) break;
+            if (rho >= this->bar_to_beat(candidate, power)) break;
 
             if (this->trusted(candidate)) continue;
 
@@ -172,30 +230,51 @@ scheduled_frame_t LCS_scheduler::do_schedule_frame(void)
         scheduled_frame.packet     = next;
         scheduled_frame.radio_mode = TX_MODE;
 
-        uint64_t key = packet_key(next->id, next->id_count);
+        const uint64_t key = packet_key(next->id, next->id_count);
+        const double   req = std::pow(next->reliability_req, 1.0 / next->frames);
 
-        /* Check if this frame is being transmitted for the first time */
-        if (accumulated_prob.find(key) == accumulated_prob.end())
+        /* What earlier copies of this frame already bought. Absent means this
+           is the first attempt, which is a zero accumulation rather than a
+           special case. */
+        const auto   it  = this->accumulated_prob.find(key);
+        const double acc = (it != this->accumulated_prob.end()) ? it->second : 0.0;
+
+        /* The power this frame goes out at. Fixed power is the one-tier case
+           of the same rule -- the single permitted power either finishes the
+           frame or is spent anyway and the frame comes back -- so both
+           settings take the same path from here down and only the tier choice
+           is switched. */
+        unsigned int tx    = power;
+        double       p_sel = rho;
+
+        if (this->adaptive_power)
         {
-            accumulated_prob[key] = rho;
-        }
-        else
-        {
-            /* Calculate the accumulated prob after this transmission */
-            accumulated_prob[key] =
-                accumulated_prob[key] + rho - accumulated_prob[key] * rho;
+            const int tier =
+                select_power_tier([this, chosen](unsigned int j)
+                                  { return this->rho_hat(chosen, POWER_TIERS[j]); },
+                                  0U, this->max_power_idx, acc, req);
+
+            tx    = POWER_TIERS[tier >= 0 ? static_cast<unsigned int>(tier)
+                                          : this->max_power_idx];
+            p_sel = this->rho_hat(chosen, tx);
         }
 
-        /* Check if the prob is high enough to remove this frame from the buffer */
-        if (accumulated_prob[key] >=
-            std::pow(next->reliability_req, 1.0 / next->frames))
+        const double acc_after = acc + p_sel - acc * p_sel;
+
+        scheduled_frame.transmission_power = tx;
+
+        /* Enough copies are now in the air to clear the per-frame
+           requirement, so the frame leaves the buffer and its accumulation is
+           forgotten with it. */
+        if (acc_after >= req)
         {
             scheduled_frame.remove_from_buffer = true;
-            accumulated_prob.erase(key);
+            this->accumulated_prob.erase(key);
         }
         else
         {
             scheduled_frame.remove_from_buffer = false;
+            this->accumulated_prob[key]        = acc_after;
         }
     }
     else
@@ -222,8 +301,12 @@ std::string LCS_scheduler::get_name() const
 {
     /* Power is part of the name so runs at different tx_power do not overwrite
        each other's scheduled-packet logs, and so is a switched-off policy, so
-       an ablation arm does not overwrite the full scheduler's. */
-    std::string name = "LCS_" + std::to_string(this->tx_power) + "W";
+       an ablation arm does not overwrite the full scheduler's. An
+       adaptive-power instance has no one power to name, so it is named for the
+       policy instead -- the same spelling CATS uses for the same switch. */
+    std::string name = "LCS_" + (this->adaptive_power
+                                 ? std::string("adaptP")
+                                 : (std::to_string(this->tx_power) + "W"));
 
     if (!this->early_drop) name += "_nodrop";
 

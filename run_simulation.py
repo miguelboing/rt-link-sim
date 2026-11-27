@@ -32,10 +32,10 @@ TESTS_DIR = "tests"
 # its own.
 #
 # `four-channels-bcs-lcs` runs the same four channels as `four-channel` but a
-# different question: not which scheduler wins, but what early dropping is
-# worth, under both channel rules. It is a mode rather than extra curves
-# because ablation corners on the comparison figure made it a figure about
-# switches.
+# different question: not which scheduler wins, but what CATS's policies are
+# worth on a channel-choosing scheduler — early dropping, then adaptive power —
+# under both channel rules. It is a mode rather than extra curves because
+# ablation corners on the comparison figure made it a figure about switches.
 MODES = ("single-channel", "four-channel", "four-channels-bcs-lcs", "tests")
 
 # ── Figure style and paper symbols ────────────────────────────────────────────
@@ -287,6 +287,28 @@ BASE_BCS_SCHEDULER_25W = dict(BASE_BCS_SCHEDULER, tx_power=25)
 
 BASE_BCS_FULL_SCHEDULER = dict(BASE_BCS_SCHEDULER, early_drop=True)
 
+# CATS's power policy: the transmit power of each frame is chosen from the
+# predictor tiers (1, 10, 25 W) under a cap set by the task set's predicted
+# utilization, instead of being fixed. `tx_power` is dropped rather than left
+# in the dict — the C++ side does not read it in this mode, and a value
+# recorded in `experiment_params.json` that nothing used is how a run gets
+# misread later.
+#
+# These carry `utilization_threshold`, which until now was CATS's alone, so the
+# CLI's fourth positional argument reaches them too (see the override block in
+# __main__): moving CATS's cap policy while leaving theirs at the default would
+# compare the same policy at two settings.
+_ADAPTIVE_POWER = {"adaptive_power": True, "utilization_threshold": 0.9}
+
+def _adaptive_power(base: dict) -> dict:
+    """`base` with the power policy on and the now-unread `tx_power` removed."""
+    return dict({k: v for k, v in base.items() if k != "tx_power"},
+                **_ADAPTIVE_POWER)
+
+# On top of the *full* scheduler, so it pairs with BCS_FULL_5W on one switch
+# and the gap between those two curves is the power policy and the draw.
+BASE_BCS_ADAPT_SCHEDULER = _adaptive_power(BASE_BCS_FULL_SCHEDULER)
+
 # LCS walks a ladder of the channels ranked by long-run mean: it holds the
 # highest rung it can, listens one rung down before ever moving to a worse
 # channel, and keeps only the rungs at or above its seat fresh. In SCHEDULERS
@@ -314,6 +336,10 @@ BASE_LCS_SCHEDULER_25W = dict(BASE_LCS_SCHEDULER, tx_power=25)
 # switch that is on — but it does mean the log file for `LCS_LADDER_5W` is not
 # called that.
 BASE_LCS_LADDER_SCHEDULER = dict(BASE_LCS_SCHEDULER, early_drop=False)
+
+# The same power policy over the ladder, on top of the *full* scheduler so it
+# pairs with LCS_5W on one switch. See _adaptive_power() above.
+BASE_LCS_ADAPT_SCHEDULER = _adaptive_power(BASE_LCS_SCHEDULER)
 
 # The three ablation switches are spelled out rather than left to the C++
 # defaults so `experiment_params.json` records what a run actually used. All
@@ -433,8 +459,10 @@ _ABLATION_TITLES = {
     "CATS_NOURG":        "CATS, no urgency check",
     "LCS":               "LCS, full",
     "LCS_LADDER":        "LCS, ladder only",
+    "LCS_ADAPT":         "LCS, adaptive power",
     "BCS":               "BCS, selection only",
     "BCS_FULL":          "BCS, full",
+    "BCS_ADAPT":         "BCS, adaptive power",
 }
 
 def scheduler_title(label: str, *extra: str) -> str:
@@ -641,26 +669,43 @@ SCHEDULERS = [
 ]
 
 # The roster of the `four-channels-bcs-lcs` mode: the two channel-choosing
-# schedulers with early dropping off and on, and nothing else. It is a policy
-# study, so it is a mode of its own rather than four more curves on the figure
-# above — the same reasoning that gives the CATS ablation its own case, and the
-# reason that figure stays at seven readable curves.
+# schedulers with each of CATS's two surviving policies — early dropping and
+# adaptive power — switched off and on, and nothing else. It is a policy study,
+# so it is a mode of its own rather than six more curves on the figure above —
+# the same reasoning that gives the CATS ablation its own case, and the reason
+# that figure stays at seven readable curves.
 #
-# Read it two ways. Down a family, the pair isolates early dropping under one
-# channel rule. Across the families, the same corner under two channel rules
-# says whether the policy's effect depends on how the channel is chosen — a
-# policy that only pays off for a scheduler walking a static ladder is a
-# different finding from one that pays off whatever the channel rule is.
+# Read it two ways. Down a family it is a chain, each step one switch from the
+# one before: bare, then early dropping, then adaptive power on top of that.
+# Across the families, the same step under two channel rules says whether a
+# policy's effect depends on how the channel is chosen — a policy that only
+# pays off for a scheduler walking a static ladder is a different finding from
+# one that pays off whatever the channel rule is.
+#
+# ⚠️ The adaptive step is not a clean one-switch isolation, and the figure
+# cannot be read as if it were. Adaptive power also changes the power every
+# *other* decision is taken at: with power fixed the channel rule compares
+# channels at 5 W, and with it adaptive they are compared at the cap, which is
+# a predictor tier (10 or 25 W in practice). The schedulers have to agree with
+# themselves about what they are spending — comparing channels at a power they
+# would never transmit at is the confusion this codebase has been bitten by
+# before — so the reference power moves with the policy. On the four shipped
+# channels the long-run-mean *ordering* is the same at 5, 10 and 25 W, so the
+# ladder and the usable set come out identical; what differs is the per-slot
+# comparison of live estimates.
 #
 # ⚠️ The plain-named corner is not the same corner in the two families. BCS_5W
 # is the *bare* scheduler and LCS_5W is the *full* one, because the C++
 # defaults differ (see BASE_BCS_SCHEDULER above). The legends spell that out;
-# the labels do not.
+# the labels do not. The adaptive entries carry no power in their label at all,
+# since they have no one power — the same reason CATS does not.
 BCS_LCS_SCHEDULERS = [
     ("LCS_LADDER_5W", BASE_LCS_LADDER_SCHEDULER),
     ("LCS_5W",        BASE_LCS_SCHEDULER),
+    ("LCS_ADAPT",     BASE_LCS_ADAPT_SCHEDULER),
     ("BCS_5W",        BASE_BCS_SCHEDULER),
     ("BCS_FULL_5W",   BASE_BCS_FULL_SCHEDULER),
+    ("BCS_ADAPT",     BASE_BCS_ADAPT_SCHEDULER),
 ]
 
 # The roster of the `single-channel` mode's U sweep, on C = 1. It is v1.1's
@@ -2485,26 +2530,30 @@ if __name__ == "__main__":
                  f"[belief_threshold] [utilization_threshold]\n"
                  f"the output folder names itself <mode>_<YYYYMMDD-HHMM>.")
 
-    if belief_threshold is not None:
-        # Applies to *every* belief-driven scheduler, not just CATS: CHEDF
-        # listens on the same rule, and moving CATS's threshold while leaving
-        # CHEDF's at the default would silently compare schedulers under
-        # different listening policies. The names are printed so the
-        # reach of the override is visible in the run header.
-        _rosters = (SCHEDULERS, SINGLE_CHANNEL_SCHEDULERS,
-                    ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS,
-                    BCS_LCS_SCHEDULERS)
+    # Both overrides reach *every* scheduler that reads the knob, not just
+    # CATS: more than one scheduler listens on belief and more than one runs
+    # the slack power cap, and moving one while leaving the others at the
+    # default would silently compare schedulers under different policies. The
+    # names are printed so the reach of each override is visible in the run
+    # header.
+    _rosters = (SCHEDULERS, SINGLE_CHANNEL_SCHEDULERS,
+                ERROR_SWEEP_SCHEDULERS, CATS_COMPARISON_SCHEDULERS,
+                BCS_LCS_SCHEDULERS)
+
+    def _override(key, value):
         touched = sorted({name for roster in _rosters
-                          for name, cfg in roster if "belief_threshold" in cfg})
+                          for name, cfg in roster if key in cfg})
         for roster in _rosters:
             for _name, cfg in roster:
-                if "belief_threshold" in cfg:
-                    cfg["belief_threshold"] = belief_threshold
-        print(f"belief_threshold overridden to {belief_threshold} for: {', '.join(touched)}")
+                if key in cfg:
+                    cfg[key] = value
+        print(f"{key} overridden to {value} for: {', '.join(touched)}")
+
+    if belief_threshold is not None:
+        _override("belief_threshold", belief_threshold)
 
     if utilization_threshold is not None:
-        BASE_CATS_SCHEDULER["utilization_threshold"] = utilization_threshold
-        print(f"CATS utilization_threshold overridden to {utilization_threshold}")
+        _override("utilization_threshold", utilization_threshold)
 
     if MASTER_SEED is not None:
         print(f"SEED={MASTER_SEED} — per-sim seeds derived deterministically; "
@@ -2576,7 +2625,7 @@ if __name__ == "__main__":
 
     if mode == "four-channels-bcs-lcs":
         warn_window_k(SWEEP_SCENARIOS)
-        print(f"Running BCS/LCS early-dropping comparison on "
+        print(f"Running BCS/LCS queue- and power-policy comparison on "
               f"{', '.join(c['name'] for c in BASE_CHANNELS)} "
               f"({n_runs} runs/point, {n_workers} workers, "
               f"window_k={BASE_SIM.get('window_k', 100)})")
@@ -2586,10 +2635,10 @@ if __name__ == "__main__":
         # make two runs' outputs indistinguishable by filename alone.
         results = run_sweep(n_runs, n_workers, schedulers=BCS_LCS_SCHEDULERS)
         plot_schedulability(results, basename="results_bcs_lcs",
-                            title=f"BCS and LCS early dropping"
+                            title=f"BCS and LCS policies"
                                   f"{_window_k_suffix()}")
         plot_channel_usage(results, basename="results_bcs_lcs_channels",
-                           title="Channel usage — BCS and LCS early dropping")
+                           title="Channel usage — BCS and LCS policies")
         print(f"\nTotal elapsed: {format_duration(time.perf_counter() - t_start)}")
         sys.exit(0)
 

@@ -194,6 +194,17 @@ int main(int argc, char* argv[])
         sched_channels.push_back({(*channels)[c]->name, *m});
     }
 
+    /* A-priori knowledge of the periodic task set, for the schedulers that
+       size demand and utilization against a horizon. Aggregated across all
+       generators, and built here rather than inside one branch because more
+       than one scheduler type reads it. */
+    std::vector<periodic_task_t> periodic_tasks;
+    for (const auto& gen : packet_gens)
+    {
+        auto t = gen.get_periodic_tasks();
+        periodic_tasks.insert(periodic_tasks.end(), t.begin(), t.end());
+    }
+
     std::unique_ptr<BaseScheduler> scheduler;
     if (sched_type == "CHEDF")
     {
@@ -235,11 +246,19 @@ int main(int argc, char* argv[])
            channel-re-selection baseline, so a policy switched on by default
            would become part of every gap measured against it; a config that
            wants it says so. */
+        /* Adaptive power defaults off, like the queue policy: the plain
+           scheduler is the channel-re-selection baseline, and a power policy
+           running underneath it would join every gap measured against it.
+           `tx_power` is read only while it is off, and `utilization_threshold`
+           only while it is on. */
         scheduler = std::make_unique<BCS_scheduler>(
-            sched_cfg["tx_power"],
+            sched_cfg.value("tx_power", 0U),
             sched_cfg["belief_threshold"],
             sched_cfg.value("n_usable", std::size_t{0}),
             sched_cfg.value("early_drop", false),
+            sched_cfg.value("adaptive_power", false),
+            sched_cfg.value("utilization_threshold", 0.9),
+            periodic_tasks,
             &buffer,
             system_tick,
             std::move(sched_channels)
@@ -262,11 +281,18 @@ int main(int argc, char* argv[])
                       << std::endl;
 
         /* Early dropping defaults on: a config that does not name it gets the
-           full scheduler, and the bare ladder is what has to say so. */
+           full scheduler, and the bare ladder is what has to say so. Adaptive
+           power defaults *off*, unlike it, because a ladder at fixed power is
+           what the published scheduler is and the power policy is an addition
+           to it. `tx_power` is read only while it is off, and
+           `utilization_threshold` only while it is on. */
         scheduler = std::make_unique<LCS_scheduler>(
-            sched_cfg["tx_power"],
+            sched_cfg.value("tx_power", 0U),
             sched_cfg["belief_threshold"],
             sched_cfg.value("early_drop", true),
+            sched_cfg.value("adaptive_power", false),
+            sched_cfg.value("utilization_threshold", 0.9),
+            periodic_tasks,
             &buffer,
             system_tick,
             std::move(sched_channels)
@@ -327,15 +353,6 @@ int main(int argc, char* argv[])
     }
     else if (sched_type == "CATS")
     {
-        /* CATS is aware of the periodic task set so it can size demand/U
-           against the horizon. Aggregate across all generators. */
-        std::vector<periodic_task_t> periodic_tasks;
-        for (const auto& gen : packet_gens)
-        {
-            auto t = gen.get_periodic_tasks();
-            periodic_tasks.insert(periodic_tasks.end(), t.begin(), t.end());
-        }
-
         /* The three ablation switches default to enabled, so a config that
            omits them is the published CATS. `tx_power` is only read when
            adaptive_power is false. */

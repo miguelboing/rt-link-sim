@@ -11,6 +11,7 @@
 #include "cats.hpp"
 #include "schedulers/policies/edf_queue.hpp"
 #include "schedulers/policies/feasibility.hpp"
+#include "schedulers/policies/power_tier.hpp"
 #include "schedulers/policies/urgency.hpp"
 
 
@@ -28,14 +29,14 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
     BaseScheduler(buffer, sys_tick, std::move(channels)),
     channel(channel),
     adaptive_power(adaptive_power),
-    fixed_power_idx(N_POWERS - 1U),
+    fixed_power_idx(TOP_POWER_TIER),
     early_drop(early_drop),
     urgency_check(urgency_check),
     belief_threshold(belief_threshold),
     periodic_tasks(periodic_tasks),
-    horizon_H(0U),
+    horizon_H(task_hyperperiod(periodic_tasks)),
     utilization_threshold(utilization_threshold),
-    max_power_idx(2U)
+    max_power_idx(TOP_POWER_TIER)
 {
     /* Fixed-power mode has to name a tier the predictor actually reports, or
        the probability driving its retransmission maths would belong to a
@@ -44,54 +45,19 @@ CATS_scheduler::CATS_scheduler(std::size_t channel,
        loudly. */
     if (!this->adaptive_power)
     {
-        bool found = false;
-        for (unsigned int i = 0U; i < N_POWERS; i++)
-        {
-            if (POWER_LEVELS[i] == fixed_tx_power) { this->fixed_power_idx = i; found = true; break; }
-        }
-        if (!found)
+        const int idx = power_tier_index(fixed_tx_power);
+
+        if (idx < 0)
             throw std::runtime_error("CATS: fixed tx_power " + std::to_string(fixed_tx_power)
-                                     + "W is not one of the predictor tiers (1, 10, 25 W)");
+                                     + "W is not one of the predictor tiers ("
+                                     + power_tiers_string() + ")");
+
+        this->fixed_power_idx = static_cast<unsigned int>(idx);
 
         /* No adaptive cap survives: the cap *is* the fixed tier, so p_best,
            demand, infeasibility and urgency all read that tier too. */
         this->max_power_idx = this->fixed_power_idx;
     }
-
-    /* Horizon = LCM of all task periods. Demand within one hyperperiod is
-       exact (every task completes an integer number of releases), so the
-       utilization estimate is tighter than max(T_i). */
-    for (const auto& t : this->periodic_tasks)
-    {
-        if (t.period == 0U) continue;
-        this->horizon_H = (this->horizon_H == 0U) ? t.period
-                                                  : std::lcm(this->horizon_H, t.period);
-    }
-}
-
-double CATS_scheduler::compute_demand_slots(double p) const
-{
-    if (this->horizon_H == 0U) return 0.0;
-
-    double demand = 0.0;
-    for (const auto& t : this->periodic_tasks)
-    {
-        if (t.period == 0U) continue;
-        const double k = retx_count_required(p, std::pow(t.reliability_req,
-                                                         1.0 / t.frames));
-        if (std::isinf(k)) return std::numeric_limits<double>::infinity();
-        /* releases of task i within H: ceil(H / T_i) */
-        const double releases = std::ceil(static_cast<double>(this->horizon_H) /
-                                          static_cast<double>(t.period));
-        demand += releases * static_cast<double>(t.frames) * k;
-    }
-    return demand;
-}
-
-double CATS_scheduler::compute_utilization(double p) const
-{
-    if (this->horizon_H == 0U) return 0.0;
-    return this->compute_demand_slots(p) / static_cast<double>(this->horizon_H);
 }
 
 scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
@@ -163,7 +129,6 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
 
         if (next != nullptr)
         {
-            const unsigned int power_levels[3] = {1, 10, 25};
             uint64_t key     = packet_key(next->id, next->id_count);
             double req       = std::pow(next->reliability_req,
                                         1.0 / next->frames);
@@ -180,24 +145,16 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
                clears the requirement. Fixed: the loop spans the single fixed
                tier, so that is always the one chosen. */
             const unsigned int lo_idx = this->adaptive_power ? 0U : this->fixed_power_idx;
-            int chosen_idx = -1;
-            for (unsigned int i = lo_idx; i <= this->max_power_idx; i++)
-            {
-                const double p_i = this->prob_at(i);
-                double acc_after = acc + p_i - acc * p_i;
-                if (acc_after >= req)
-                {
-                    chosen_idx = static_cast<int>(i);
-                    break;
-                }
-            }
+            const int chosen_idx =
+                select_power_tier([this](unsigned int i) { return this->prob_at(i); },
+                                  lo_idx, this->max_power_idx, acc, req);
 
             if (chosen_idx >= 0)
             {
                 /* Accumulated probability meets requirement — remove from buffer */
                 const double p_sel = this->prob_at(static_cast<unsigned int>(chosen_idx));
                 accumulated_prob[key] = acc + p_sel - acc * p_sel;
-                scheduled_frame.transmission_power = power_levels[chosen_idx];
+                scheduled_frame.transmission_power = POWER_TIERS[chosen_idx];
                 scheduled_frame.remove_from_buffer = true;
                 accumulated_prob.erase(key);
             }
@@ -207,7 +164,7 @@ scheduled_frame_t CATS_scheduler::do_schedule_frame(void)
                    tier and keep retransmitting on the next slot. */
                 const double p_cap = this->prob_at(this->max_power_idx);
                 accumulated_prob[key] = acc + p_cap - acc * p_cap;
-                scheduled_frame.transmission_power = power_levels[this->max_power_idx];
+                scheduled_frame.transmission_power = POWER_TIERS[this->max_power_idx];
                 scheduled_frame.remove_from_buffer = false;
             }
 
@@ -251,21 +208,12 @@ void CATS_scheduler::update_power_cap(void)
        would creep back into demand/infeasibility/urgency. */
     if (!this->adaptive_power) return;
 
-    /* Slack-aware power cap: walk the predictor tiers low-to-high and pick the
-       first one whose predicted utilization fits below the threshold. If even
-       the highest tier doesn't fit (overloaded schedule), fall back to it so
-       behavior degrades gracefully. */
-    unsigned int new_cap = N_POWERS - 1U;
-    for (unsigned int i = 0U; i < N_POWERS; i++)
-    {
-        const double U = this->compute_utilization(this->prob_at(i));
-        if (U <= this->utilization_threshold)
-        {
-            new_cap = i;
-            break;
-        }
-    }
-    this->max_power_idx = new_cap;
+    /* The tiers are read off the label that just moved, on the one channel
+       this scheduler transmits on. */
+    this->max_power_idx =
+        slack_power_cap(this->periodic_tasks, this->horizon_H,
+                        this->utilization_threshold,
+                        [this](unsigned int i) { return this->prob_at(i); });
 }
 
 std::string CATS_scheduler::get_name() const
@@ -280,7 +228,7 @@ std::string CATS_scheduler::get_name() const
     std::string name = "CATS";
     name += this->adaptive_power
             ? "_adaptP"
-            : ("_" + std::to_string(POWER_LEVELS[this->fixed_power_idx]) + "W");
+            : ("_" + std::to_string(POWER_TIERS[this->fixed_power_idx]) + "W");
     if (!this->early_drop)    name += "_nodrop";
     if (!this->urgency_check) name += "_nourg";
     return name;
